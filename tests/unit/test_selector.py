@@ -13,6 +13,7 @@ from awe.domain.enums import (
     EffectPolicy,
     ExecutionExposure,
     FinalActionOwner,
+    HabitCadence,
     HabitDecision,
     IntentState,
     PlanMode,
@@ -36,6 +37,11 @@ def _evidence(days=3, sessions=3) -> HabitEvidence:
         first_seen_at=_NOW,
         last_seen_at=_NOW,
         status_vector=StatusVector(success=sessions, fail=0, cancel=0, unknown=0),
+        active_days_total=days,
+        support_ratio=1.0,
+        mean_gap_days=1.0,
+        gap_regularity=1.0,
+        cadence=HabitCadence.DAILY,
     )
 
 

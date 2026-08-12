@@ -740,6 +740,29 @@ class HabitConfig:
     Yalnızca bu iki boyut hard gate'tir; ayrı bir minimum-occurrence eşiği yoktur — her
     distinct session zaten en az bir occurrence anlamına gelir."""
 
+    daily_cadence_max_mean_gap_days: float = 2.0
+    """`mean_gap_days` bu değere kadarsa (VE `min_gap_regularity_for_named_cadence` de
+    geçiliyorsa) `HabitCadence.DAILY` (bkz. docs/engine-decisions.md #7). Dört cadence eşiği
+    kasıtlı olarak yalnızca ARTAN üst-sınırlardır (ayrı alt-sınır alanı yok) — kovalar arası
+    boşluk kalmasın diye."""
+
+    weekly_cadence_max_mean_gap_days: float = 10.0
+    """`daily_cadence_max_mean_gap_days`'in hemen üzerinden başlayan üst sınır — `weekly_regular`
+    sentetik profili (sabit 7 gün) için pay bırakır."""
+
+    biweekly_cadence_max_mean_gap_days: float = 20.0
+    """`biweekly_regular` sentetik profili (sabit 14 gün) için pay bırakan üst sınır."""
+
+    monthly_cadence_max_mean_gap_days: float = 45.0
+    """`monthly_regular` sentetik profili (sabit 30 gün) ve gerçek-dünya ay atlaması için pay
+    bırakan üst sınır. Bunun üzerindeki her ortalama boşluk isimlendirilemeyecek kadar seyrek
+    sayılıp `HabitCadence.IRREGULAR` olur."""
+
+    min_gap_regularity_for_named_cadence: float = 0.7
+    """`gap_regularity = max(0, 1 - coefficient_of_variation)` bu eşiğin altındaysa (CV > 0.3)
+    örüntü, ortalama boşluk hangi aralığa düşerse düşsün `IRREGULAR` sayılır — regularity asla
+    tek başına (ortalama olmadan) bir named cadence üretemez."""
+
 
 DEFAULT_EFFECT_POLICY: dict[ObservationEffect, EffectPolicy] = {
     ObservationEffect.ROUTE: EffectPolicy.SAFE,
@@ -1157,6 +1180,18 @@ class HabitDecision(StrEnum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class HabitCadence(StrEnum):
+    """Habit Evaluator'ın distinct_days boşluklarından türettiği, salt açıklanabilirlik
+    amaçlı kaba periyodiklik etiketi — ne yeni bir hard gate ne Selector girdisidir (bkz.
+    docs/engine-decisions.md #7)."""
+
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
+    MONTHLY = "monthly"
+    IRREGULAR = "irregular"
+
+
 class AnchorStrength(StrEnum):
     STRONG = "strong"
     MEDIUM = "medium"
@@ -1356,9 +1391,17 @@ class BaseFamily:
 # FILE: src/awe/domain/habit.py
 """Habit Evaluator'ın kanıt ve karar modelleri (bölüm 6.7).
 
-Bilinçli olarak sade: regularity/entropy/lift gibi gelişmiş istatistikler burada yoktur
-("Bu katman ... MVP dışında bırakılmıştır", bölüm 6.7). Değerlendirme, Base Family değil
-`TargetVariant` seviyesinde yapılır (bölüm 6.6) — farklı hedefler kanıtlarını havuzlamaz.
+Değerlendirme, Base Family değil `TargetVariant` seviyesinde yapılır (bölüm 6.6) — farklı
+hedefler kanıtlarını havuzlamaz.
+
+`HabitEvidence`, hard-count gate'in (`distinct_sessions`/`distinct_days`) ÜZERİNE, kullanıcı
+talebiyle eklenmiş deterministik bir regularity/support katmanı taşır (`cadence`,
+`mean_gap_days`, `gap_regularity`, `active_days_total`, `support_ratio` — bkz.
+docs/engine-decisions.md #7). Bu, spesifikasyonun "regularity/entropy/lift gibi gelişmiş
+istatistikler ... MVP dışında bırakılmıştır" (bölüm 6.7) sınırının kasıtlı, kapsamı sınırlı bir
+aşımıdır: hiçbiri yeni bir hard gate DEĞİLDİR, `HABIT_DETECTED` kararını etkilemez ve Selector
+sıralamasına (`awe.selection.selector._ranking_key`) girmez — yalnızca kalıcı kanıt vektörüne
+eklenip görünürlük/gelecekteki kullanım için taşınır.
 """
 
 from __future__ import annotations
@@ -1366,7 +1409,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from awe.domain.enums import HabitDecision, ReasonCode
+from awe.domain.enums import HabitCadence, HabitDecision, ReasonCode
 
 
 @dataclass(frozen=True, slots=True)
@@ -1395,6 +1438,31 @@ class HabitEvidence:
     status_vector: StatusVector
     """Fail/cancel occurrence'lar sayımdan çıkarılmaz (bölüm 6.7) — yalnızca burada dağılım
     olarak kayıt altına alınır."""
+
+    active_days_total: int
+    """Bu variant'ın kendi `[first_seen_at, last_seen_at]` penceresi İÇİNDE, subject'in TÜM
+    session'larından (yalnızca bu pattern değil) gelen distinct aktif gün sayısı — proje zaman
+    diliminde (bkz. `awe.habit.assessment`). `support_ratio`'nun paydası; pencere bu pattern'in
+    kendi ilk/son gözlem tarihinden türediği için her zaman >= `distinct_days` (bkz.
+    docs/engine-decisions.md #7)."""
+
+    support_ratio: float
+    """`distinct_days / active_days_total`. 1.0: subject'in bu penceredeki HER aktif günü bu
+    pattern'i içeriyor. Düşük değer: subject sık aktif ama bu pattern yalnızca bir azınlık
+    günde görülüyor. Tek başına bir gate DEĞİLDİR."""
+
+    mean_gap_days: float
+    """Sıralı distinct günler arası ardışık farkların aritmetik ortalaması."""
+
+    gap_regularity: float
+    """`max(0, 1 - coefficient_of_variation)`, `[0, 1]`. 1.0: sabit aralık. Tek bir gap'te (2
+    distinct gün) matematiksel olarak 1.0'dır (popülasyon stdev'i tek örnekte 0'dır, "tanımsız"
+    değil) — ince kanıtlı bir pattern'in DAILY etiketlenmesine yol açabilir; kasıtlı ve
+    belgelenmiş bir düşük-güven durumu (bkz. docs/engine-decisions.md #7)."""
+
+    cadence: HabitCadence
+    """`mean_gap_days` + `gap_regularity`'den türetilen, salt açıklanabilirlik amaçlı kaba
+    periyodiklik etiketi — ne bir gate ne Selector girdisidir."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2069,8 +2137,12 @@ __all__ = ["evaluate_habit"]
 # FILE: src/awe/habit/assessment.py
 """Habit Evaluator (bölüm 6.7): tek görevi recurrence ölçmektir.
 
-MVP kapısı: `distinct session >= 3 AND distinct calendar day >= 2`. Bu katman regularity/
-entropy/lift gibi gelişmiş istatistikler kullanmaz — yalnızca hard count-based gate.
+MVP kapısı: `distinct session >= 3 AND distinct calendar day >= 2`. Bu HÂLÂ TEK hard gate'tir
+ve değişmedi. Bunun ÜZERİNE, kullanıcı talebiyle (bkz. docs/engine-decisions.md #7)
+deterministik bir regularity/support istatistik katmanı eklendi: `HabitEvidence.cadence`,
+`mean_gap_days`, `gap_regularity`, `active_days_total`, `support_ratio`. Bunların HİÇBİRİ yeni
+bir gate değildir ve Selector sıralamasına girmez — yalnızca HABIT_DETECTED kararı verildikten
+SONRA, aynı distinct-gün-kümesi üzerinde hesaplanıp kanıt vektörüne eklenir.
 
 Kısayol tetiklemesiyle başlayan occurrence'lar organik kanıttan hariç tutulur (belgede yazılı
 değil, bkz. `ObservationTrigger.SHORTCUT` docstring'i — kasıtlı bir superset koruması: aksi
@@ -2078,18 +2150,62 @@ halde bir kısayolun kendi kullanımı kendi önerisini besleyen bir döngü olu
 
 from __future__ import annotations
 
+import statistics
+from datetime import date
 from zoneinfo import ZoneInfo
 
 from awe.config.engine_config import HabitConfig
-from awe.domain.enums import HabitDecision, ObservationStatus, ReasonCode
+from awe.domain.enums import HabitCadence, HabitDecision, ObservationStatus, ReasonCode
 from awe.domain.episode import EpisodeCandidate
 from awe.domain.habit import HabitAssessment, HabitEvidence, StatusVector
+from awe.domain.series import OSeries
 from awe.domain.target import TargetVariant
+
+
+def _gap_statistics(days: set[date]) -> tuple[float, float]:
+    """Distinct günlerin sıralı ardışık farklarından `(mean_gap_days, gap_regularity)`
+    üretir. Popülasyon stdev'i (`statistics.pstdev`) kullanılır çünkü elimizdeki gap listesi
+    bir örneklem değil, bu pattern'in gözlenen TÜM boşluklarıdır. Tek bir gap'te (iki distinct
+    gün) pstdev matematiksel olarak 0'dır (n=1 için "tanımsız" değil, `statistics.stdev`'den
+    farkı budur) — bu yüzden `gap_regularity=1.0` özel bir dal GEREKTİRMEDEN doğal olarak
+    çıkar (bkz. docs/engine-decisions.md #7)."""
+    ordered = sorted(days)
+    # strict=False kasıtlı: `ordered[1:]` bir eleman kısadır -- ardışık çift üretmenin
+    # standart deyimi budur (N nokta -> N-1 boşluk).
+    gaps = [(later - earlier).days for earlier, later in zip(ordered, ordered[1:], strict=False)]
+    if not gaps:
+        # distinct_days == 1: yalnızca `min_distinct_days` proje bazında < 2'ye düşürülürse
+        # ulaşılabilir (varsayılan kapı zaten en az bir gap garanti eder). Ölçülebilir hiçbir
+        # aralık yok; sıfır kanıtla "düzenli" iddia etmek yanıltıcı olurdu.
+        return 0.0, 0.0
+    mean_gap = statistics.fmean(gaps)
+    coefficient_of_variation = statistics.pstdev(gaps) / mean_gap  # mean_gap >= 1.0: distinct tarihler
+    return mean_gap, max(0.0, 1.0 - coefficient_of_variation)
+
+
+def _cadence_of(mean_gap_days: float, gap_regularity: float, config: HabitConfig) -> HabitCadence:
+    if gap_regularity < config.min_gap_regularity_for_named_cadence:
+        return HabitCadence.IRREGULAR
+    if mean_gap_days <= config.daily_cadence_max_mean_gap_days:
+        return HabitCadence.DAILY
+    if mean_gap_days <= config.weekly_cadence_max_mean_gap_days:
+        return HabitCadence.WEEKLY
+    if mean_gap_days <= config.biweekly_cadence_max_mean_gap_days:
+        return HabitCadence.BIWEEKLY
+    if mean_gap_days <= config.monthly_cadence_max_mean_gap_days:
+        return HabitCadence.MONTHLY
+    return HabitCadence.IRREGULAR  # isimlendirilemeyecek kadar seyrek (ör. çeyreklik+)
+
+
+def _active_days_total(all_series: list[OSeries], tz: ZoneInfo, window_start: date, window_end: date) -> int:
+    all_dates = (series.started_at.astimezone(tz).date() for series in all_series)
+    return len({day for day in all_dates if window_start <= day <= window_end})
 
 
 def evaluate_habit(
     variant: TargetVariant,
     candidates_by_id: dict[str, EpisodeCandidate],
+    all_series: list[OSeries],
     timezone_name: str,
     config: HabitConfig,
 ) -> HabitAssessment:
@@ -2105,8 +2221,9 @@ def evaluate_habit(
         )
 
     tz = ZoneInfo(timezone_name)
+    distinct_day_set = {candidate.observed_at.astimezone(tz).date() for candidate in organic}
     distinct_sessions = len({candidate.session_id for candidate in organic})
-    distinct_days = len({candidate.observed_at.astimezone(tz).date() for candidate in organic})
+    distinct_days = len(distinct_day_set)
 
     reason_codes: list[ReasonCode] = []
     if distinct_sessions < config.min_distinct_sessions:
@@ -2126,18 +2243,38 @@ def evaluate_habit(
     for candidate in organic:
         status_counts[candidate.final_status] += 1
 
+    first_seen_at = min(candidate.observed_at for candidate in organic)
+    last_seen_at = max(candidate.observed_at for candidate in organic)
+
+    mean_gap_days, gap_regularity = _gap_statistics(distinct_day_set)
+    cadence = _cadence_of(mean_gap_days, gap_regularity, config)
+
+    window_start = first_seen_at.astimezone(tz).date()
+    window_end = last_seen_at.astimezone(tz).date()
+    active_days_total = _active_days_total(all_series, tz, window_start, window_end)
+    # Her `distinct_days` tarihi bir `EpisodeCandidate.observed_at` (== kaynak `OSeries.
+    # started_at`, bkz. `episodes.candidates._candidate_from_indices`) demektir ve pencere bu
+    # pattern'in kendi ilk/son gününden türediği için tanım gereği pencerenin içindedir --
+    # bölünme asla sıfıra gitmez (bkz. docs/engine-decisions.md #7).
+    assert active_days_total >= distinct_days
+
     evidence = HabitEvidence(
         organic_occurrences=len(organic),
         distinct_sessions=distinct_sessions,
         distinct_days=distinct_days,
-        first_seen_at=min(candidate.observed_at for candidate in organic),
-        last_seen_at=max(candidate.observed_at for candidate in organic),
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
         status_vector=StatusVector(
             success=status_counts[ObservationStatus.SUCCESS],
             fail=status_counts[ObservationStatus.FAIL],
             cancel=status_counts[ObservationStatus.CANCEL],
             unknown=status_counts[ObservationStatus.UNKNOWN],
         ),
+        active_days_total=active_days_total,
+        support_ratio=distinct_days / active_days_total,
+        mean_gap_days=mean_gap_days,
+        gap_regularity=gap_regularity,
+        cadence=cadence,
     )
     return HabitAssessment(variant_id=variant.variant_id, decision=HabitDecision.HABIT_DETECTED, evidence=evidence)
 
@@ -2707,6 +2844,7 @@ from awe.domain.enums import (
     AnchorStrength,
     EffectPolicy,
     ExecutionExposure,
+    HabitCadence,
     HabitDecision,
     ObservationEffect,
     ObservationSource,
@@ -2805,6 +2943,11 @@ def habit_evidence_to_dict(evidence: HabitEvidence) -> dict:
             "cancel": evidence.status_vector.cancel,
             "unknown": evidence.status_vector.unknown,
         },
+        "active_days_total": evidence.active_days_total,
+        "support_ratio": evidence.support_ratio,
+        "mean_gap_days": evidence.mean_gap_days,
+        "gap_regularity": evidence.gap_regularity,
+        "cadence": evidence.cadence.value,
     }
 
 
@@ -2822,6 +2965,11 @@ def dict_to_habit_evidence(data: dict) -> HabitEvidence:
             cancel=status_vector["cancel"],
             unknown=status_vector["unknown"],
         ),
+        active_days_total=data["active_days_total"],
+        support_ratio=data["support_ratio"],
+        mean_gap_days=data["mean_gap_days"],
+        gap_regularity=data["gap_regularity"],
+        cadence=HabitCadence(data["cadence"]),
     )
 
 
@@ -3949,11 +4097,12 @@ def _evaluate_variant(
     family: BaseFamily,
     candidates_by_id: dict[str, EpisodeCandidate],
     series_by_id: dict[str, OSeries],
+    all_series: list[OSeries],
     engine_config: EngineConfig,
     project_id: str,
     subject_id: str,
 ) -> tuple[HabitAssessment, Candidate | None]:
-    assessment = evaluate_habit(variant, candidates_by_id, engine_config.timezone, engine_config.habit)
+    assessment = evaluate_habit(variant, candidates_by_id, all_series, engine_config.timezone, engine_config.habit)
     if assessment.decision != HabitDecision.HABIT_DETECTED:
         log_event("habit_pending", project_id=project_id, subject_id=subject_id, variant_key=variant.variant_id)
         return assessment, None
@@ -4099,7 +4248,7 @@ def analyze_subject(
         for variant in resolve_targets(family, candidates_by_id):
             family_key_by_variant[variant.variant_id] = family.family_id
             assessment, candidate = _evaluate_variant(
-                variant, family, candidates_by_id, series_by_id, engine_config, project_id, subject_id
+                variant, family, candidates_by_id, series_by_id, all_series, engine_config, project_id, subject_id
             )
             assessments.append(assessment)
             if candidate is not None:

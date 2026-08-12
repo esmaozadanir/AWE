@@ -12,6 +12,7 @@ from awe.domain.enums import (
     AnchorStrength,
     EffectPolicy,
     ExecutionExposure,
+    HabitCadence,
     HabitDecision,
     ObservationEffect,
     ObservationSource,
@@ -110,6 +111,11 @@ def habit_evidence_to_dict(evidence: HabitEvidence) -> dict:
             "cancel": evidence.status_vector.cancel,
             "unknown": evidence.status_vector.unknown,
         },
+        "active_days_total": evidence.active_days_total,
+        "support_ratio": evidence.support_ratio,
+        "mean_gap_days": evidence.mean_gap_days,
+        "gap_regularity": evidence.gap_regularity,
+        "cadence": evidence.cadence.value,
     }
 
 
@@ -127,6 +133,11 @@ def dict_to_habit_evidence(data: dict) -> HabitEvidence:
             cancel=status_vector["cancel"],
             unknown=status_vector["unknown"],
         ),
+        active_days_total=data["active_days_total"],
+        support_ratio=data["support_ratio"],
+        mean_gap_days=data["mean_gap_days"],
+        gap_regularity=data["gap_regularity"],
+        cadence=HabitCadence(data["cadence"]),
     )
 
 

@@ -143,6 +143,64 @@ config-yükleme mekanizması, structured logging ve suggestion lifecycle'ı ele 
 - API'de hâlâ hiçbir kimlik doğrulama/yetkilendirme mekanizması yoktur — bu, önceki
   incelemede de flagged edilmiş, henüz kapatılmamış bir MVP açığıdır.
 
+## 7. Kullanıcı talebiyle eklenen regularity/support istatistik katmanı
+
+Bölüm 6.7 açıkça "Bu katman regularity/entropy/lift gibi gelişmiş istatistikler kullanmaz ...
+MVP dışında bırakılmıştır" der ve Habit Evaluator'ı yalnızca `distinct session >= 3 AND
+distinct calendar day >= 2` hard kapısına indirger. Kullanıcı, bu kapıyı DEĞİŞTİRMEDEN, üzerine
+gerçek bir düzenlilik/destek ölçümü eklenmesini talep etti — amaç, kapıyı az farkla geçen bir
+örüntüyle gerçekten tekrarlayan günlük/haftalık bir alışkanlığı ayırt edebilmek.
+
+Bu, spesifikasyonun MVP sınırının kasıtlı, kapsamı sınırlı bir aşımıdır; yine de MVP-uygun
+sayılır çünkü: (a) yeni bir hard gate DEĞİLDİR — HABIT_DETECTED kararı hâlâ yalnızca mevcut
+sayımlara bakar; (b) Selector sıralamasına (`selection.selector._ranking_key`) GİRMEZ — bu da
+kullanıcıyla netleştirilen bir kapsam kararı, gerçek veriyle rakamlar görülmeden sıralama
+mantığına dokunulmadı (bkz. bu bölümün altındaki #6'daki `saved_actions` sıralama kararına
+paralel bir temkinlilik); (c) deterministiktir — ML/inference yoktur, yalnızca ortalama/
+popülasyon-stdev/sabit eşik; (d) var olan `distinct_days` tarih-kümesi idiyomunu birebir
+yeniden kullanır. Legacy spesifikasyonun (artık geçersiz `docs/legacy/AWE_MASTER_SPEC.md`
+§64-66) iki uyarısı bu tasarımı doğrudan şekillendirdi: regularity asla hard gate olmamalı
+(weekly/monthly alışkanlıklar kaçırılmamalı) ve support sınırsız büyüyüp diğer kanıtı
+ezmemeli — ikisi de "sadece ölç, gate etme" kararıyla karşılanmış oluyor.
+
+**Cadence (5 kova):** `mean_gap_days` + `gap_regularity` (`= max(0, 1 - CV)`) üzerinden
+türetilir. Düzenlilik önce kontrol edilir — `gap_regularity < min_gap_regularity_for_named_cadence`
+(varsayılan 0.7, yani CV > 0.3) ise sonuç ortalamadan bağımsız IRREGULAR'dır
+(`irregular_recurring` sentetik profiliyle doğrulandı: günler `(1,4,11,18,29,43,55)`, ortalama
+9.0 gün WEEKLY aralığına düşerdi ama CV≈0.41 diskalifiye eder — bu, düzenlilik kontrolünün
+gerçekten işe yaradığını kanıtlayan senaryo). Değerlendirilen ve reddedilen alternatif: her kova
+için bağımsız [min,max] çifti — ilk tasarım böyleydi ama kovalar arası KAPSANMAYAN aralıklar
+bırakıyordu (ör. ortalama 3 veya 22 gün hiçbir kovaya düşmüyordu). Seçilen: dört artan üst-sınır
+eşiği (yalnızca üst sınır, komşu kovanın alt sınırı örtük — `daily<=2.0`, `weekly<=10.0`,
+`biweekly<=20.0`, `monthly<=45.0`, ötesi IRREGULAR) — boşluk kalmaz VE her eşik `HabitConfig`
+üzerinde bağımsız override edilebilir tek bir `float` alanıdır. Sınır durumu bilerek kabul
+edildi: sabit 2 günlük bir boşluk (`long_workflow` sentetik profili) DAILY'ye düşer — "gün aşırı"
+bir örüntüyü "günlük" etiketlemek tartışılabilir ama yeni bir kova eklemeyi gerektirmeyen, MVP
+lehine küçük bir ödünleşim.
+
+**Support (pencereli payda):** `active_days_total` = subject'in TÜM session'larından gelen,
+ama YALNIZCA bu variant'ın kendi `[first_seen_at, last_seen_at]` penceresi içindeki distinct
+gün sayısı. Değerlendirilen ve reddedilen alternatif: whole-history payda — reddedildi
+(kullanıcı kararı) çünkü eski bir alışkanlığın yakın zamanda yoğun tekrarını "düşük destek"
+olarak cezalandırırdı. Trade-off: yeni/kısa ömürlü bir pattern küçük ve gürültüye duyarlı bir
+paydaya sahip olur — bu bir gate DEĞİL, yalnızca kanıt alanı olduğu için kabul edilebilir, ama
+görünürlük amaçlı gelecekteki her tüketici bunu küçük `active_days_total` değerlerinde
+düşük-güven olarak ele almalıdır. `active_days_total >= distinct_days` değişmezi HER ZAMAN
+geçerlidir (payda asla sıfır olamaz): pencere bu pattern'in kendi tarihlerinden türer ve
+`EpisodeCandidate.observed_at` her zaman kaynak `OSeries.started_at`'a eşittir (bkz.
+`awe.episodes.candidates._candidate_from_indices`) — bu `awe.habit.assessment.evaluate_habit`
+içinde bir `assert` ile de belgelenir (`selection.selector._ranking_key`'deki
+`assert evidence is not None` presedansıyla tutarlı bir stil).
+
+**İki-gün kenar durumu:** kapı tam `distinct_days=2` iken tek bir gap ölçülür; popülasyon
+stdev'i (`statistics.pstdev`, `statistics.stdev` DEĞİL) tek örnekte matematiksel olarak 0'dır
+(istatistiksel olarak "tanımsız" değil) — bu yüzden `gap_regularity=1.0` özel kod
+GEREKTİRMEDEN çıkar. Sonuç: kapıyı az farkla geçen bir örüntü (`two_day_burst`) DAILY
+etiketlenir — savunulabilir ama düşük-güven; cadence'in neden bir gate OLMADIĞININ tam
+gerekçesi budur. Ayrıca: `min_distinct_days` proje bazında 1'e (veya 0'a) çekilirse
+`distinct_days=1` teorik olarak kapıdan geçebilir — bu durumda ölçülebilir hiçbir gap yoktur;
+`_gap_statistics` bunu `(0.0, 0.0)` (→ IRREGULAR) döndürerek ele alır, crash etmez.
+
 ## 6. Kullanıcı talebiyle yapılan bilinçli tasarım kararı: Selector sıralama sırası
 
 Bölüm 6.15 Selector'ın lexicographic sıralama alanlarını sayar

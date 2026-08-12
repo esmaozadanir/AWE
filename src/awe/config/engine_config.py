@@ -34,6 +34,29 @@ class HabitConfig:
     Yalnızca bu iki boyut hard gate'tir; ayrı bir minimum-occurrence eşiği yoktur — her
     distinct session zaten en az bir occurrence anlamına gelir."""
 
+    daily_cadence_max_mean_gap_days: float = 2.0
+    """`mean_gap_days` bu değere kadarsa (VE `min_gap_regularity_for_named_cadence` de
+    geçiliyorsa) `HabitCadence.DAILY` (bkz. docs/engine-decisions.md #7). Dört cadence eşiği
+    kasıtlı olarak yalnızca ARTAN üst-sınırlardır (ayrı alt-sınır alanı yok) — kovalar arası
+    boşluk kalmasın diye."""
+
+    weekly_cadence_max_mean_gap_days: float = 10.0
+    """`daily_cadence_max_mean_gap_days`'in hemen üzerinden başlayan üst sınır — `weekly_regular`
+    sentetik profili (sabit 7 gün) için pay bırakır."""
+
+    biweekly_cadence_max_mean_gap_days: float = 20.0
+    """`biweekly_regular` sentetik profili (sabit 14 gün) için pay bırakan üst sınır."""
+
+    monthly_cadence_max_mean_gap_days: float = 45.0
+    """`monthly_regular` sentetik profili (sabit 30 gün) ve gerçek-dünya ay atlaması için pay
+    bırakan üst sınır. Bunun üzerindeki her ortalama boşluk isimlendirilemeyecek kadar seyrek
+    sayılıp `HabitCadence.IRREGULAR` olur."""
+
+    min_gap_regularity_for_named_cadence: float = 0.7
+    """`gap_regularity = max(0, 1 - coefficient_of_variation)` bu eşiğin altındaysa (CV > 0.3)
+    örüntü, ortalama boşluk hangi aralığa düşerse düşsün `IRREGULAR` sayılır — regularity asla
+    tek başına (ortalama olmadan) bir named cadence üretemez."""
+
 
 DEFAULT_EFFECT_POLICY: dict[ObservationEffect, EffectPolicy] = {
     ObservationEffect.ROUTE: EffectPolicy.SAFE,

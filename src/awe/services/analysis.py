@@ -81,11 +81,12 @@ def _evaluate_variant(
     family: BaseFamily,
     candidates_by_id: dict[str, EpisodeCandidate],
     series_by_id: dict[str, OSeries],
+    all_series: list[OSeries],
     engine_config: EngineConfig,
     project_id: str,
     subject_id: str,
 ) -> tuple[HabitAssessment, Candidate | None]:
-    assessment = evaluate_habit(variant, candidates_by_id, engine_config.timezone, engine_config.habit)
+    assessment = evaluate_habit(variant, candidates_by_id, all_series, engine_config.timezone, engine_config.habit)
     if assessment.decision != HabitDecision.HABIT_DETECTED:
         log_event("habit_pending", project_id=project_id, subject_id=subject_id, variant_key=variant.variant_id)
         return assessment, None
@@ -231,7 +232,7 @@ def analyze_subject(
         for variant in resolve_targets(family, candidates_by_id):
             family_key_by_variant[variant.variant_id] = family.family_id
             assessment, candidate = _evaluate_variant(
-                variant, family, candidates_by_id, series_by_id, engine_config, project_id, subject_id
+                variant, family, candidates_by_id, series_by_id, all_series, engine_config, project_id, subject_id
             )
             assessments.append(assessment)
             if candidate is not None:
