@@ -37,10 +37,22 @@ def _occurrence_post_view_screen(
     anchor_obs_index = anchor_step.observation_index
     anchor_timestamp = series.raw_observations[anchor_obs_index].timestamp
 
-    next_action_timestamp = None
-    if position + 1 < len(candidate.steps):
-        next_index = candidate.steps[position + 1].observation_index
-        next_action_timestamp = series.raw_observations[next_index].timestamp
+    # Bir sonraki ACTION'ın KAYNAK session'daki gerçek konumu aranır -- adayın kendi
+    # (muhtemelen kısaltılmış) adım listesindeki "bir sonraki adım" değil. Aday sıra-korumalı
+    # bir ortak alt diziyse (bölüm 6.4 sapması, bkz. docs/engine-decisions.md #1), kaynak
+    # session'da bu adaya dahil olmayan başka ACTION'lar hâlâ devam ediyor olabilir; pencereyi
+    # yalnızca adayın kendi son adımına göre sınırsız bırakmak, o sonraki (adaya dahil olmayan)
+    # adımların ekranlarını yanlışlıkla bu occurrence'a ait gösterir (bölüm 6.8: "bir sonraki
+    # ACTION timestamp'inden önce gelmeli" -- gözlenen akıştaki bir sonraki ACTION, adayın
+    # kendi alt kümesindeki değil).
+    next_action_timestamp = next(
+        (
+            series.raw_observations[step.observation_index].timestamp
+            for step in series.steps
+            if step.observation_index > anchor_obs_index
+        ),
+        None,
+    )
 
     screens: set[str] = set()
     for obs in series.raw_observations[anchor_obs_index + 1 :]:
