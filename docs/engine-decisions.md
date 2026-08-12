@@ -4,7 +4,41 @@ Bu doküman, kod okunduğunda hemen belli olmayan tasarım kararlarının gerek�
 Özellikle spesifikasyonun (`AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md`) açıkça bırakmadığı boşlukları
 nasıl doldurduğumuzu ve önceki tasarımdan bilinçli olarak nerede ayrıldığımızı belgeler.
 
-## 1. Önceki tasarıma göre bilinçli tersine dönüşler
+## 1. Kullanıcı talebiyle yapılan bilinçli spesifikasyon sapması: sıra-korumalı ortak alt dizi
+
+Bölüm 6.4 açıkça "Fuzzy merge yoktur. Optional step toleransı yoktur." der ve Episode
+Candidate Builder'ı yalnızca **ardışık (contiguous)** ortak alt diziler bulacak şekilde
+tanımlar. İlk uygulama bunu harfiyen uyguladı, ancak gerçek kullanım geri bildiriminde bu
+kuralın pratikte aşırı parçalanmaya yol açtığı görüldü: gerçek kullanıcılar bir davranışı
+neredeyse hiçbir zaman birebir aynı, kesintisiz adım dizisiyle tekrar etmez (araya bir
+bildirim kontrolü, yanlış tıklama, retry vb. girer) — yalnızca tam ardışıklık arayan bir
+algoritma bu yüzden gerçek alışkanlıkları sistematik olarak kaçırıyordu.
+
+Bunun üzerine `awe.episodes.candidates` bilinçli olarak spesifikasyonun bu tek maddesinden
+sapacak şekilde güçlendirildi: iki chunk arasındaki ortak desen artık **sıra-korumalı ama
+ardışık olması gerekmeyen** bir alt dizi (klasik LCS — longest common subsequence) olarak
+aranıyor. Değerlendirilen ve reddedilen alternatifler:
+
+- **Eski core/optional adım modeli** (fuzzy benzerlik eşiği + ambiguity margin, önceki
+  tasarımdan) — en esnek ama "fuzzy merge yoktur" ilkesinden en uzağı; benzerlik skoru ve
+  eşik kalibrasyonu gerektirir, bu motorun tam olarak kaçınmaya çalıştığı türden bir
+  karmaşıklıktır.
+- **Sabit K-adıma kadar atlama toleransı** — daha basit/öngörülebilir ama keyfi bir sabit
+  gerektirir ve LCS'in kendiliğinden sağladığı "en uzun ortak deseni bul" garantisini vermez.
+- **Seçilen: LCS tabanlı sıra-korumalı eşleşme** — eşleşen HER adım hâlâ tam (exact) değer
+  eşitliği taşır; yalnızca aralarındaki "boşluk" toleransı gevşetilir. Yeni bir benzerlik
+  skoru veya eşik eklemez, yalnızca contiguity zorunluluğunu kaldırır. Bir chunk çiftinin
+  birden fazla bağımsız ortak deseni olabileceğinden, tek LCS bulunduktan sonra eşleşen
+  pozisyonlar maskelenip arama tekrarlanır ("iterative peeling").
+
+Bu değişiklik `EpisodeCandidateKind.COMMON_RUN`'ı `COMMON_SUBSEQUENCE` olarak yeniden
+adlandırdı ve `EpisodeCandidate.start_index: int` alanını (yalnızca ardışık aralıklar için
+anlamlıydı) `step_indices: tuple[int, ...]` ile değiştirdi (ardışık olmayan pozisyon
+kümelerini de taşıyabilir). Downstream katmanların hiçbiri (Target Resolver, Habit, Anchor,
+Screen Transition Evidence) bu değişiklikten etkilenmedi çünkü hepsi `candidate.steps`
+tuple'ının kendi iç sırasına göre çalışır, kaynak dizideki fiziksel ardışıklığa değil.
+
+## 2. Önceki tasarıma göre bilinçli tersine dönüşler
 
 Bu motor bir önceki oturumda yeniden tasarlanmış bir sınıflandırma katmanının üzerine inşa
 edildi. Yeni spesifikasyon iki noktada o tasarımın **tam tersini** söylüyor; ikisi de burada
@@ -21,7 +55,7 @@ harfiyen uygulandı:
   kontrol edilerek belirlenir — status artık "bu bir action mı" sorusuna değil "bu action
   başarılı oldu mu" sorusuna cevap verir.
 
-## 2. Spesifikasyonun boş bıraktığı, burada doldurulan noktalar
+## 3. Spesifikasyonun boş bıraktığı, burada doldurulan noktalar
 
 - **`USER_TRIGGERS` tanımı** (bölüm 6.2): Classifier sözde kodu `trigger in USER_TRIGGERS`
   der ama bu kümeyi hiçbir yerde tanımlamaz. Bölüm 4'ün trigger sözlüğünden `automatic` ve
@@ -61,7 +95,7 @@ harfiyen uygulandı:
   ama sayı vermez. Sırasıyla `0.3` ve `0.5` olarak seçildi; `RiskConfig` üzerinden proje
   başına override edilebilir.
 
-## 3. Eski tasarımdan kalan, artık anlamsızlaşan kavramların kaldırılması
+## 4. Eski tasarımdan kalan, artık anlamsızlaşan kavramların kaldırılması
 
 - **Fuzzy family matching** (weighted-LCS benzerlik, IDF ayrıştırıcı ağırlıklandırma,
   ambiguity margin, core/optional bigram ilişkileri, cohesion skoru): Bölüm 6.5 "Fuzzy merge
@@ -92,7 +126,7 @@ harfiyen uygulandı:
   ettiği `FieldBinding` recent-drift kavramı yeni tasarımda yok, `target_variable` zaten aynı
   temel senaryoyu (hedef değişkenliği) kapsıyor.
 
-## 4. Korunan altyapı (spesifikasyonun ele almadığı alanlar)
+## 5. Korunan altyapı (spesifikasyonun ele almadığı alanlar)
 
 Spesifikasyon yalnızca Adapter→Selector zincirini tanımlar; persistence şeması, API sözleşmesi,
 config-yükleme mekanizması, structured logging ve suggestion lifecycle'ı ele almaz (bölüm 9.10,

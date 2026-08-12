@@ -231,7 +231,7 @@ def build_family_from_steps(
             series_id=series.series_id,
             kind=EpisodeCandidateKind.FULL_CHUNK,
             steps=series.steps,
-            start_index=0,
+            step_indices=tuple(range(len(series.steps))),
             observed_at=series.started_at,
             entry_trigger=series.entry_trigger,
             has_shortcut_trigger=series.has_shortcut_trigger,

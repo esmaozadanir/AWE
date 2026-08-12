@@ -1,9 +1,9 @@
-"""Episode Candidate modeli (bölüm 6.4).
+"""Episode Candidate modeli.
 
 Family eşleştirmesine giren aday davranış birimi. İki kaynaktan üretilir: bir OSeries'in
-tamamı (`FULL_CHUNK`) ya da farklı chunk/session'lar arasında bulunan exact, contiguous,
-pairwise-maximal ortak alt diziler (`COMMON_RUN`). Henüz habit kararı vermez — yalnızca
-Exact Base Family'nin girişidir.
+tamamı (`FULL_CHUNK`) ya da farklı chunk/session'lar arasında bulunan, sıra-korumalı exact
+ortak alt diziler (`COMMON_SUBSEQUENCE` — bkz. `awe.episodes.candidates` modül docstring'i).
+Henüz habit kararı vermez — yalnızca Exact Base Family'nin girişidir.
 """
 
 from __future__ import annotations
@@ -26,8 +26,11 @@ class EpisodeCandidate:
 
     kind: EpisodeCandidateKind
     steps: tuple[BehaviorStep, ...]
-    start_index: int
-    """Kaynak OSeries.steps içindeki başlangıç konumu (izlenebilirlik)."""
+    step_indices: tuple[int, ...]
+    """Kaynak OSeries.steps içindeki, `steps` ile aynı sırada karşılık gelen pozisyonlar
+    (izlenebilirlik). `FULL_CHUNK` için ardışıktır (`0..len-1`); `COMMON_SUBSEQUENCE` için
+    sıra korunur ama ardışık olması gerekmez (araya kaynak dizide eşleşmeyen adımlar
+    girebilir)."""
 
     observed_at: datetime
     entry_trigger: ObservationTrigger

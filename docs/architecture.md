@@ -117,13 +117,23 @@ Symbol = (action, effect, screen, mapping_version)
 ağırlıklandırma yoktur (bölüm 6.4-6.5). Exact Base Family, tamamen aynı sembol dizisini
 paylaşan `EpisodeCandidate`'ları hash-tabanlı olarak gruplar; bir family = bir exact dizi.
 
+Bir chunk'ın kendisi (`FULL_CHUNK`) her zaman ardışıktır. Ancak farklı chunk'lar arasındaki
+ortak alt diziler (`COMMON_SUBSEQUENCE`) **sıra-korumalı ama ardışık olması gerekmeyen**
+(LCS — longest common subsequence) bir eşleşmeyle bulunur: eşleşen her adım hâlâ tam exact
+değer eşitliği taşır, yalnızca araya kaynak dizide eşleşmeyen adımların girmesine izin
+verilir (ör. bir bildirim kontrolü, retry). Bu, bölüm 6.4'ün "Optional step toleransı yoktur"
+ifadesinden kullanıcı talebiyle yapılan bilinçli bir sapmadır — gerekçesi
+`docs/engine-decisions.md` bölüm 1'de.
+
 ## 6. Bilinen sınırlamalar
 
 1. **Artımlı state yok** (yukarıda bölüm 2) — büyük event geçmişlerinde Episode Candidate
-   Builder'ın O(n²) maliyeti her analiz çağrısında tekrar ödenir.
-2. **Exact fragmentation** (bölüm 9.3): fuzzy tolerans olmadığı için varyasyonlu gerçek
-   alışkanlıklar (ör. ara adım eklenmiş/çıkarılmış akışlar) ayrı family'lere bölünebilir.
-   Precision lehine bilinçli kabul edilmiş bir ödünleşim.
+   Builder'ın O(n²) maliyeti (pairwise LCS dahil) her analiz çağrısında tekrar ödenir.
+2. **Exact fragmentation kısmen azaltıldı, tamamen kalkmadı** (bölüm 9.3): sıra-korumalı
+   ortak alt dizi eşleşmesi araya eklenmiş/çıkarılmış adımları tolere eder, ama hâlâ (a)
+   **sıra değişikliğini** (A→B yerine B→A) ve (b) **değer farkını** (aynı adımın farklı
+   `action`/`effect`/`screen` ile loglanması) tolere etmez — bunlar hâlâ ayrı family'lere
+   bölünür. Precision lehine bilinçli kabul edilmiş, daraltılmış bir ödünleşim.
 3. **PostgreSQL hiç test edilmedi** — yalnızca portable SQLAlchemy tipleri kullanılır ama bu
    ortamda gerçek Postgres'e karşı test edilmemiştir.
 4. **Suggestion lifecycle spesifikasyon dışı** (bölüm 9.11) — gösterim zamanlaması, aynı anda

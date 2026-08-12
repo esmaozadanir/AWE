@@ -177,10 +177,13 @@ class SelectionOutcome(StrEnum):
 
 
 class EpisodeCandidateKind(StrEnum):
-    """Bir Episode Candidate'in nasıl üretildiği (bölüm 6.4) — yalnızca açıklanabilirlik amaçlı."""
+    """Bir Episode Candidate'in nasıl üretildiği — yalnızca açıklanabilirlik amaçlı."""
 
     FULL_CHUNK = "full_chunk"
-    COMMON_RUN = "common_run"
+    COMMON_SUBSEQUENCE = "common_subsequence"
+    """Farklı chunk'lar arasında bulunan, sıra-korumalı (mutlaka ardışık olması gerekmeyen)
+    exact ortak alt dizi (bkz. `awe.episodes.candidates` modül docstring'i — bölüm 6.4'ün
+    "contiguous" tanımından kasıtlı bir sapma, gerekçesi orada belgelenir)."""
 
 
 class SuggestionState(StrEnum):
