@@ -1,46 +1,32 @@
-"""Test fixture yardımcıları: Observation ve OSeries nesnelerini elle ama tutarlı biçimde üretir.
+"""Test fixture yardımcıları: Observation, OSeries ve BaseFamily nesnelerini elle ama
+tutarlı biçimde üretir.
 
 Bu modül testler tarafından kullanılır, üretim kodunun bir parçası değildir.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from awe.config.engine_config import EngineConfig
 from awe.domain.enums import (
-    FamilyMatchOutcome,
+    EpisodeCandidateKind,
     ObservationEffect,
-    ObservationRole,
     ObservationSource,
     ObservationStatus,
     ObservationTrigger,
     OrderingConfidence,
 )
-from awe.domain.family import BehaviorFamily
+from awe.domain.episode import EpisodeCandidate
+from awe.domain.family import BaseFamily
 from awe.domain.observation import Observation, ObservationQuality
 from awe.domain.series import OSeries
 from awe.domain.tokens import BehaviorStep, BehaviorToken
-from awe.families import accept_series, match_series, seed_family
-from awe.series.normalization import normalize_steps
-
-
-@dataclass(frozen=True, slots=True)
-class StepSpec:
-    action_key: str
-    effect: ObservationEffect = ObservationEffect.ROUTE
-    role: ObservationRole = ObservationRole.ACTION
-    screen: str | None = "screen"
-    widget: str | None = None
-    target: str | None = None
-    parameters: dict[str, str] = field(default_factory=dict)
-    status: ObservationStatus = ObservationStatus.SUCCESS
-    trigger: ObservationTrigger = ObservationTrigger.BUTTON
+from awe.families import group_into_families
 
 
 def make_observation(
-    action_key: str,
+    action: str,
     *,
     event_id: str,
     session_id: str,
@@ -49,14 +35,14 @@ def make_observation(
     project_id: str = "project",
     effect: ObservationEffect = ObservationEffect.ROUTE,
     status: ObservationStatus = ObservationStatus.SUCCESS,
-    role: ObservationRole = ObservationRole.ACTION,
     trigger: ObservationTrigger = ObservationTrigger.BUTTON,
     source: ObservationSource = ObservationSource.CLIENT,
     screen: str | None = "screen",
-    widget: str | None = None,
     target: str | None = None,
-    parameters: dict[str, str] | None = None,
-    breaks_episode: bool = False,
+    duration_ms: int | None = None,
+    missing_target_field: bool = False,
+    invalid_duration: bool = False,
+    mapping_version: str = "test-fixture",
 ) -> Observation:
     return Observation(
         event_id=event_id,
@@ -64,22 +50,32 @@ def make_observation(
         subject_id=subject_id,
         session_id=session_id,
         timestamp=timestamp,
+        action=action,
         source=source,
-        action=action_key,
-        role=role,
-        effect=effect,
         trigger=trigger,
-        screen=screen,
-        widget=widget,
-        target=target,
-        parameters=parameters or {},
+        effect=effect,
         status=status,
-        breaks_episode=breaks_episode,
-        mapping_version="test-fixture",
+        screen=screen,
+        target=target,
+        duration_ms=duration_ms,
+        mapping_version=mapping_version,
         quality=ObservationQuality(
-            has_screen=screen is not None, has_widget=widget is not None, has_session_id=True
+            has_screen=screen is not None,
+            missing_target_field=missing_target_field,
+            invalid_duration=invalid_duration,
         ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class StepSpec:
+    action: str
+    effect: ObservationEffect = ObservationEffect.ROUTE
+    screen: str | None = "screen"
+    target: str | None = None
+    target_unknown: bool = False
+    status: ObservationStatus = ObservationStatus.SUCCESS
+    trigger: ObservationTrigger = ObservationTrigger.BUTTON
 
 
 def make_series_from_steps(
@@ -91,40 +87,71 @@ def make_series_from_steps(
     project_id: str = "project",
     has_shortcut_trigger: bool = False,
     series_suffix: str = "0",
+    mapping_version: str = "test-fixture",
+    cut_by_ambiguity: bool = False,
+    views_after: dict[int, list[str]] | None = None,
 ) -> OSeries:
-    raw_observations = []
-    raw_behavior_steps = []
+    """ACTION-classified `BehaviorStep` dizisini doğrudan kurar — `extract_series` çağırmaz,
+    bu yüzden testler O-Series Builder'ın chunk-bölme kurallarından izole olur (bu kurallar
+    kendi adanmış testlerinde doğrulanır).
+
+    `views_after[step_index]`: o adımdan hemen sonra, CONTEXT-classified (effect=view) ekstra
+    raw observation'lar olarak eklenecek screen adları — Screen Transition Evidence / Anchor
+    WEAK / Destination testleri için gereklidir (bu kanıt yalnızca raw_observations'ta yaşar,
+    ACTION-only `steps` dizisinde değil)."""
+
+    views_after = views_after or {}
+    raw_observations: list[Observation] = []
+    behavior_steps: list[BehaviorStep] = []
+    clock = 0
+
     for index, spec in enumerate(steps):
         obs = make_observation(
-            spec.action_key,
+            spec.action,
             event_id=f"{session_id}-{series_suffix}-evt{index}",
             session_id=session_id,
-            timestamp=started_at + timedelta(seconds=index * 5),
+            timestamp=started_at + timedelta(seconds=clock),
             subject_id=subject_id,
             project_id=project_id,
             effect=spec.effect,
-            role=spec.role,
             status=spec.status,
             trigger=ObservationTrigger.SHORTCUT if has_shortcut_trigger and index == 0 else spec.trigger,
             screen=spec.screen,
-            widget=spec.widget,
             target=spec.target,
-            parameters=spec.parameters,
+            missing_target_field=spec.target_unknown,
+            mapping_version=mapping_version,
         )
+        step_observation_index = len(raw_observations)
         raw_observations.append(obs)
-        if spec.role == ObservationRole.NOISE:
-            continue
-        raw_behavior_steps.append(
+        clock += 5
+        behavior_steps.append(
             BehaviorStep(
-                token=BehaviorToken(action=spec.action_key, effect=spec.effect),
-                screen=spec.screen,
-                widget=spec.widget,
+                token=BehaviorToken(
+                    action=spec.action, effect=spec.effect, screen=spec.screen, mapping_version=mapping_version
+                ),
+                target=spec.target,
+                target_unknown=spec.target_unknown,
                 status=spec.status,
-                observation_index=index,
+                observation_index=step_observation_index,
             )
         )
 
-    normalization = normalize_steps(raw_behavior_steps, 4)
+        for view_index, screen in enumerate(views_after.get(index, [])):
+            view_obs = make_observation(
+                f"{spec.action}_view_{view_index}",
+                event_id=f"{session_id}-{series_suffix}-evt{index}-view{view_index}",
+                session_id=session_id,
+                timestamp=started_at + timedelta(seconds=clock),
+                subject_id=subject_id,
+                project_id=project_id,
+                effect=ObservationEffect.VIEW,
+                status=ObservationStatus.SUCCESS,
+                trigger=ObservationTrigger.AUTOMATIC,
+                screen=screen,
+                mapping_version=mapping_version,
+            )
+            raw_observations.append(view_obs)
+            clock += 1
 
     return OSeries(
         series_id=f"{session_id}#{series_suffix}",
@@ -135,28 +162,26 @@ def make_series_from_steps(
         ended_at=raw_observations[-1].timestamp,
         ordering_confidence=OrderingConfidence.HIGH,
         raw_observations=tuple(raw_observations),
-        normalized_steps=tuple(normalization.steps),
-        retries=tuple(normalization.retries),
-        detour_observation_count=normalization.detour_step_count,
-        ended_by_breaks_episode=False,
+        steps=tuple(behavior_steps),
         entry_trigger=raw_observations[0].trigger,
         entry_screen=raw_observations[0].screen,
         has_shortcut_trigger=has_shortcut_trigger,
         final_status=raw_observations[-1].status,
+        cut_by_ambiguity=cut_by_ambiguity,
     )
 
 
 def make_series(
     session_id: str,
     started_at: datetime,
-    action_keys: list[str],
+    actions: list[str],
     *,
     subject_id: str = "subject",
     project_id: str = "project",
     has_shortcut_trigger: bool = False,
     series_suffix: str = "0",
 ) -> OSeries:
-    steps = [StepSpec(action_key=key) for key in action_keys]
+    steps = [StepSpec(action=action) for action in actions]
     return make_series_from_steps(
         session_id,
         started_at,
@@ -170,22 +195,21 @@ def make_series(
 
 def build_family_from_steps(
     steps_per_occurrence: list[list[StepSpec]],
-    config: EngineConfig,
     *,
-    family_id: str = "fam1",
     project_id: str = "project",
     subject_id: str = "subject",
     base_time: datetime | None = None,
-) -> tuple[BehaviorFamily, list[OSeries]]:
-    """Bir dizi occurrence tanımından tutarlı bir BehaviorFamily + üye OSeries listesi kurar.
-
-    Her occurrence gerçek `match_series`/`accept_series` akışından geçer; bu yüzden testler
-    Family eşleştirme algoritmasını atlamış olmaz, yalnızca fixture kurulumunu kısaltır.
-    """
+    has_shortcut_trigger_at: frozenset[int] = frozenset(),
+) -> tuple[BaseFamily, list[OSeries], dict[str, EpisodeCandidate]]:
+    """Bir dizi occurrence tanımından tek bir `BaseFamily` + üye `OSeries` listesi + candidate
+    haritası kurar. Her occurrence'ın exact sembol dizisi AYNI olmalıdır (aksi halde gerçek
+    `group_into_families` onları ayrı family'lere böler ve bu fonksiyon assertion ile durur) —
+    Family eşleştirmesi artık deterministik olduğu için gerçek üretim kodundan geçirilir."""
 
     base_time = base_time or datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
     series_list: list[OSeries] = []
-    family: BehaviorFamily | None = None
+    candidates: list[EpisodeCandidate] = []
+    candidates_by_id: dict[str, EpisodeCandidate] = {}
 
     for index, steps in enumerate(steps_per_occurrence):
         started = base_time + timedelta(days=index)
@@ -196,20 +220,29 @@ def build_family_from_steps(
             subject_id=subject_id,
             project_id=project_id,
             series_suffix=str(index),
+            has_shortcut_trigger=index in has_shortcut_trigger_at,
         )
         series_list.append(series)
-        symbols = series.symbols
-        if family is None:
-            family = seed_family(
-                family_id, project_id, subject_id, series.series_id, symbols, started, config.family
-            )
-        else:
-            decision = match_series(symbols, [family], {}, config.family)
-            if decision.outcome not in (FamilyMatchOutcome.MATCH, FamilyMatchOutcome.VARIANT_MATCH):
-                raise AssertionError(
-                    f"fixture occurrence {index} beklenen family ile eşleşmedi: {decision.outcome}"
-                )
-            accept_series(family, series.series_id, symbols, started, config.family)
+        candidate = EpisodeCandidate(
+            candidate_id=f"{series.series_id}:full",
+            project_id=project_id,
+            subject_id=subject_id,
+            session_id=series.session_id,
+            series_id=series.series_id,
+            kind=EpisodeCandidateKind.FULL_CHUNK,
+            steps=series.steps,
+            start_index=0,
+            observed_at=series.started_at,
+            entry_trigger=series.entry_trigger,
+            has_shortcut_trigger=series.has_shortcut_trigger,
+            final_status=series.final_status,
+        )
+        candidates.append(candidate)
+        candidates_by_id[candidate.candidate_id] = candidate
 
-    assert family is not None
-    return family, series_list
+    families = group_into_families(candidates)
+    if len(families) != 1:
+        raise AssertionError(
+            f"fixture occurrence'ları tek bir exact family'de toplanmadı: {len(families)} family bulundu"
+        )
+    return families[0], series_list, candidates_by_id

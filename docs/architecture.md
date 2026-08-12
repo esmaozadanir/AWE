@@ -1,254 +1,135 @@
-# Mimari
+# AWE Mimarisi
 
-Bu doküman AWE'nin (Adaptive Workflow Engine) iç mimarisini, katmanlar arası veri akışını ve
-gerçek bir kullanım senaryosu üzerinden pipeline'ın uçtan uca nasıl işlediğini anlatır.
+Bu belge, `AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md` spesifikasyonuna göre uygulanan mevcut motor
+mimarisini açıklar. Motor, uygulamaya özel hiçbir iş kavramı içermez; yalnızca canonical
+`(action, effect, screen, mapping_version, target, status, trigger, source)` alanları üzerinden
+çalışır.
 
-## Genel bakış
+## 1. Uçtan uca katman sırası
 
-AWE, bir mobil uygulamadan gelen event log'larını kullanarak her kullanıcıyı (subject)
-`projectId + subjectId` kapsamında bağımsız analiz eder. Amaç, kullanıcının farklı
-session'larda ve zaman içinde tekrar ettiği gerçek davranışları bulmak, bunları bir davranış
-ailesi (Behavior Family) altında toplamak, gerçek bir alışkanlık (Habit) olup olmadığına karar
-vermek ve uygun olanlar için güvenli NAVIGATE/PREFILL kısayolları önermektir. Motor hiçbir
-zaman kullanıcı adına nihai/geri alınamaz bir işlem yapmaz (EXECUTE yoktur).
-
-Pipeline sırayla şu katmanlardan geçer:
-
-```
-RAW EVENT
-   → ADAPTER (canonical Observation)
-   → ORDERING (session içi deterministik sıra)
-   → O-SERIES EXTRACTION (behavior attempt'lere bölme)
-   → BEHAVIOR FAMILY (session'lar arası kümeleme)
-   → HABIT (gerçek tekrar mı?)
-   → SHORTCUT PLANNER (NAVIGATE/PREFILL adayları)
-   → RISK (güvenli mi?)
-   → BENEFIT (ne kadar iş kaldırıyor?)
-   → FINAL SELECTION (dominance, dedupe, fallback)
-   → SUGGESTION (lifecycle ile kalıcı)
-```
-
-Her katman yalnızca bir önceki katmanın çıktı modelini girdi alır ve kendi sorumluluğu
-dışındaki hesabı tekrar etmez — örneğin Final Selection, Risk veya Benefit'i yeniden
-hesaplamaz; yalnızca önceden hesaplanmış sonuçlar arasında seçim yapar.
-
-Kod organizasyonu bu katmanlarla birebir örtüşür: `src/awe/<layer>` altında her katmanın kendi
-paketi vardır (`adapter`, `ordering`, `series`, `families`, `habit`, `planner`, `risk`,
-`benefit`, `selection`, `lifecycle`). `src/awe/domain` bu katmanların paylaştığı, uygulamadan
-bağımsız veri modellerini taşır; `src/awe/services` katmanları birbirine bağlayan orkestrasyon
-mantığını, `src/awe/persistence` ise veritabanı şemasını ve domain nesneleri ile satırlar
-arasındaki dönüşümü içerir.
-
-## Uçtan uca örnek: şifre sıfırlama alışkanlığı
-
-ShopWave adlı bir e-ticaret uygulamasının kullanıcısı `user_42`, ayda bir kez şifresini
-değiştiriyor. Aşağıda bu davranışın altı farklı session'da nasıl işlendiğini adım adım
-izliyoruz.
-
-### 1. Raw event → Adapter → Observation
-
-Kullanıcının bir session'ında ürettiği ham event'lerden biri:
-
-```json
-{
-  "eventId": "evt_9812",
-  "projectId": "shopwave",
-  "subjectId": "user_42",
-  "sessionId": "sess_104",
-  "timestamp": "2026-08-05T10:35:22+03:00",
-  "source": "client",
-  "actionKey": "open_security",
-  "role": "action",
-  "effect": "route",
-  "trigger": "button",
-  "screen": "settings",
-  "widget": "security_row",
-  "target": null,
-  "status": "success",
-  "breaksEpisode": false
-}
+```text
+Raw Event
+  ↓
+1. Adapter                    (src/awe/adapter/)
+  ↓
+2. Classifier                 (src/awe/adapter/classification.py)
+  ↓
+3. O-Series Builder            (src/awe/series/, src/awe/ordering/)
+  ↓
+4. Episode Candidate Builder   (src/awe/episodes/)
+  ↓
+5. Exact Base Family           (src/awe/families/)
+  ↓
+6. Target Resolver             (src/awe/targeting/)
+  ↓
+7. Habit Evaluator             (src/awe/habit/)
+  ↓
+8. Screen Transition Evidence  (src/awe/screen_evidence/)
+  ↓
+9. Anchor Resolver             (src/awe/planner/anchors.py)
+  ↓
+10. Scope Projector            (src/awe/planner/scope.py)
+  ↓
+11. Destination Resolver       (src/awe/planner/destination.py)
+  ↓
+12. Shortcut Intent Builder    (src/awe/planner/intent.py)
+  ↓                ↓
+13. Risk           14. Benefit  (src/awe/risk/, src/awe/benefit/)
+  ↓                ↓
+15. Selector                   (src/awe/selection/)
+  ↓
+16. Lifecycle (suggestion state) (src/awe/lifecycle/) — spesifikasyonun kapsamı dışında,
+    mevcut mekanizma korunmuştur (bkz. bölüm 9.11)
 ```
 
-`config_examples/shopwave.yaml` içindeki mapping bu alanları doğrudan canonical isimlere
-eşler (`eventId → event_id`, `actionKey → action`, ...). Aynı davranış LearnLoop gibi
-tamamen farklı alan adları kullanan bir müşteride de (`eventUid`, `learnerId`, `actionName`,
-...) aynı canonical `Observation` modeline dönüşür — AWE Core bu iki müşteri arasındaki farkı
-hiçbir zaman görmez. `AdapterMapping` bu dönüşümü tamamen deklaratif (path + value_map)
-tanımlar; yeni bir müşteri entegrasyonu yeni kod değil, yeni bir YAML dosyası demektir.
+`src/awe/services/analysis.py::analyze_subject` bu zinciri uçtan uca bağlar.
+`src/awe/services/ingestion.py::ingest_event` yalnızca raw event kabulünü yapar (Adapter'a
+kadar), analiz ayrı bir çağrıdır.
 
-### 2. Ordering ve O-Series extraction
+## 2. Batch/recompute modeli — kasıtlı bir mimari karar
 
-`user_42`'nin bu session'daki tam akışı şöyle:
+Eski tasarımdan farklı olarak bu motor **artımlı state tutmaz**. Her `analyze_subject` çağrısı:
 
-```
-open_settings (route)
-open_security (route)
-select_change_password (select)
-enter_current_password (input)
-enter_new_password (input)
-confirm_password_reset (confirm, status=success)
-```
+1. Subject'in **tüm** `observations` satırlarını okur (yalnızca "işlenmemiş" olanları değil).
+2. O-Series Builder'ı her session için sıfırdan çalıştırır.
+3. Episode Candidate Builder'ı **tüm** O-Series'ler üzerinde sıfırdan çalıştırır (O(n²)
+   pairwise ortak-koşu karşılaştırması dahil).
+4. Family/TargetVariant/Habit/Anchor/Scope/Destination/Intent/Risk/Benefit/Selector'ı sıfırdan
+   hesaplar.
+5. `habit_evaluations` ve `shortcut_intents` tablolarını tamamen siler ve yeniden yazar.
+6. Yalnızca `suggestions` tablosu gerçek kalıcı state taşır (dismiss/cooldown) ve bu yüzden
+   upsert edilir.
 
-`order_session`, event'leri yalnızca timestamp + `event_id` tie-break'i ile sıralar (motor
-hiçbir zaman kaynaktan bir sıra numarası istemez ya da uydurmaz); bu sıralama girdi batch
-sırasından tamamen bağımsızdır.
-`extract_series`, bu sıralı akışı iki sınıra göre böler: açık `breaksEpisode=true` işaretine
-(ör. `logout`) ve `role=outcome` ya da `effect ∈ {submit, confirm}` olan bir adımın
-`status=success` olmasına (doğal tamamlanma noktası). Bu örnekte akışın tamamı tek bir O-Series
-olarak çıkar, çünkü tek tamamlanma noktası (`confirm_password_reset`) dizinin sonundadır.
+Bu, bilinçli bir sadeleştirmedir: Family/TargetVariant kimlikleri artık **deterministiktir**
+(exact sembol dizisinden türetilen hash — bkz. `awe.families.matching.compute_family_id`),
+yani "hangi family'ye ait" sorusu artımlı bir eşleştirme kararı değil, saf bir hesaplamadır.
+Spesifikasyon bölüm 9.10 incremental/online state yönetimini açıkça bu prototipin kapsamı
+dışında bırakır — bu motor o sınırı bilerek kabul eder. Gerçek zamanlı/yüksek hacimli bir
+üretim dağıtımı, Episode Candidate Builder'ın O(n²) maliyetini sınırlamak için bir sonraki
+adım olarak artımlı hesaplama katmanına ihtiyaç duyacaktır; bu tasarımın kapsamı dışıdır.
 
-Başka bir session'da kullanıcı önce yanlışlıkla "bildirim ayarları"na girip geri dönüyor:
+## 3. Canonical Observation
 
-```
-open_settings → open_notifications → back → open_security → select_change_password → ...
-```
-
-`back` adımı canonical `effect=navigate_back` ile işaretlendiğinde (bölüm 40-41), normalizasyon
-bunu ve `open_notifications`'ı karşılaştırma projeksiyonundan bounded biçimde çıkarır — ham
-kanıt (`raw_observations`) korunur, yalnızca Family karşılaştırması için kullanılan
-`normalized_steps` etkilenir. Sonuç, "temiz" session ile aynı sembol dizisidir.
-
-### 3. Behavior Family
-
-Altı session'ın normalize edilmiş sembol dizileri (`(action, effect)` çiftleri) hemen hemen
-aynıdır; küçük farklar (detour, bir yeniden deneme) normalizasyonla giderilir. İlk occurrence
-family'yi tohumlar; sonraki beşi `match_series` ile karşılaştırılır. Karşılaştırma, ayrıştırıcı
-ağırlıklı bir LCS benzerliği (yaygın semboller düşük ağırlık alır — ör. `open_settings` bu
-kullanıcının neredeyse her davranışında görülüyorsa ayırt ediciliği düşüktür) ve family'nin
-temsilci variant'ları üzerinden hesaplanan core-bigram kapsamasının birlikte sağlanmasını
-gerektirir. Sonuç `MATCH`, `VARIANT_MATCH`, `AMBIGUOUS` veya `NO_MATCH` olabilir.
-
-Bu örnekte family şu duruma ulaşır:
-
-```
-representative_variants:
-  - (open_settings, open_security, select_change_password, enter_current_password,
-     enter_new_password, confirm_password_reset)  support=5
-  - (open_settings, open_security, select_change_password, enter_new_password,
-     confirm_password_reset)  support=1   # kullanıcı bir seferinde mevcut şifreyi atladı
-cohesion: 0.93
+```python
+@dataclass(frozen=True, slots=True)
+class Observation:
+    event_id: str
+    project_id: str
+    subject_id: str
+    session_id: str
+    timestamp: datetime
+    action: str
+    source: ObservationSource
+    trigger: ObservationTrigger
+    effect: ObservationEffect
+    status: ObservationStatus
+    screen: str | None
+    target: str | None
+    duration_ms: int | None
+    mapping_version: str
+    quality: ObservationQuality
 ```
 
-Core ilişki tablosu, her iki variant'ta da görülen ardışık çiftleri ("core") ile yalnızca
-birinde görülenleri ("optional") ayırt eder; `enter_current_password` opsiyonel bir adım olarak
-işaretlenir, family bu yüzden gereksiz yere bölünmez.
+`role`, `widget`, `parameters`, `breaksEpisode`, `appVersion` kasıtlı olarak yoktur — bunlar
+eski tasarımın kalıntılarıydı; yeni sözleşme (bölüm 4) bunları tanımamaz.
 
-### 4. Habit
+`target` tri-state semantiği: `None` = raw event'te `target` açıkça `null` gönderildi ("açıkça
+hedef yok"); raw payload'da `target` anahtarı hiç yoksa değer yine `None` olur ama
+`quality.missing_target_field=True` ile işaretlenir ("hedef verisi bilinmiyor").
 
-Family, altı occurrence'ının hepsi organik (`trigger != shortcut`) olduğu için Habit
-katmanına girer. Gerçek gün/session sayıları hard gate'leri karşılıyorsa (`min_occurrences=3`,
-`min_distinct_sessions=2`, `min_distinct_days=3`), aşağıdaki gibi bir kanıt üretilir:
+## 4. Canonical sözlükler (`src/awe/domain/enums.py`)
 
-```
-organic_occurrences: 6
-distinct_days: 6
-distinct_sessions: 6
-median_gap_days: ~30
-regularity: 0.81
-liveness: LIVE (son kullanım, gözlenen medyan boşluğun ~1.2 katı önce)
-decision: PASS
-```
+| Sözlük | Değerler |
+|---|---|
+| `ObservationSource` | client, server, system, unknown |
+| `ObservationTrigger` | button, keyboard, voice, long_press, hardware, biometric, swipe, drag, navigation, notification, deeplink, automatic, **shortcut** (bölüm 4'te yok, kasıtlı ek — bkz. `docs/engine-decisions.md`), unknown |
+| `ObservationEffect` | submit, create, delete, confirm, update, toggle, route, request, open, download, input, select, filter, sort, focus, view, none, unknown |
+| `ObservationStatus` | success, fail, cancel, unknown |
+| `EventClassification` | action, context, ignore (hesaplanan, kalıcı olmayan) |
 
-Aylık bir davranış olduğu için `median_gap_days` büyük olsa da, "liveness" mutlak bir gün
-sayısına değil bu Habit'in KENDİ gözlenen periyoduna göre değerlendirilir — bu yüzden aylık bir
-Habit, günlük bir Habit'le aynı mutlak eşikle "stale" sayılmaz (bkz.
-`docs/engine-decisions.md`).
+## 5. Sembol ve exact eşleşme
 
-### 5. Shortcut Planner
-
-Family core'u üzerinde, terminal olmayan (submit/confirm dışı) her pozisyon bir aday anchor
-olabilir. Bu örnekte:
-
-* **NAVIGATE** — `open_security` (family core'undaki ilk `route` pozisyonu): kullanıcıyı
-  doğrudan güvenlik ekranına götürür.
-* **PREFILL (partial)** — `select_change_password` sonrası: henüz hiçbir alan doldurulmamış,
-  yalnızca doğru alt-ekrana konumlandırma.
-* **PREFILL (deep)** — `enter_new_password` sonrası: `target` bu akışta hiç gözlenmediği için
-  (şifre değiştirme bir target taşımaz) yalnızca "buraya kadar ilerlemiş" durumu temsil eder.
-
-PREFILL, gözlenen eventleri yeniden oynatmaz; yalnızca "kullanıcı bu noktaya kadar tipik olarak
-hangi state'i kurmuş" sorusunun istatistiksel cevabını taşır.
-
-### 6. Risk
-
-`confirm_password_reset` adımının kendisi `effect=confirm` taşıdığı için canonical güvenlik
-politikasına göre `BLOCKED`'dır — Planner zaten bu adımı anchor olarak seçmez, Risk katmanı
-bunu bağımsız olarak da doğrular (defense in depth). NAVIGATE ve PREFILL adayları için:
-
-```
-sample_size: 6         (>= min_sample_size_for_confidence)
-failure_rate: 0.0
-data_quality_score: 1.0
-family_cohesion: 0.93  (>= min_family_cohesion_for_allow)
-decision: ALLOW
+```text
+Symbol = (action, effect, screen, mapping_version)
 ```
 
-### 7. Benefit
+`screen` sembolün parçasıdır — eski tasarımdan farklı olarak fuzzy benzerlik veya ayrıştırıcı
+ağırlıklandırma yoktur (bölüm 6.4-6.5). Exact Base Family, tamamen aynı sembol dizisini
+paylaşan `EpisodeCandidate`'ları hash-tabanlı olarak gruplar; bir family = bir exact dizi.
 
-NAVIGATE için "kaydedilen eylem" yalnızca `role=action` olan adımlardır — `open_security`
-adayı, kullanıcının o noktaya erişmek için attığı `open_settings` ve `open_security` adımlarının
-ikisini de kapsar (medyan 2 kaydedilen eylem). Derin PREFILL adayı `enter_current_password` ve
-`enter_new_password` dahil daha fazla adımı kapsadığından medyan kaydedilen eylem sayısı daha
-yüksektir.
+## 6. Bilinen sınırlamalar
 
-### 8. Final Selection ve lifecycle
-
-Aynı family içinde NAVIGATE ve PREFILL adayları hayatta kaldığında, PREFILL birincil öneri,
-NAVIGATE ise güvenli fallback olarak seçilir (bölüm 83'teki "FULL PREFILL → PARTIAL PREFILL →
-NAVIGATE → BLOCK" zincirinin bir örneği). Suggestion ilk kez `ACTIVE` durumunda oluşturulur;
-kullanıcı reddederse `DISMISSED` olur ve `dismiss_cooldown_days` süresi dolup davranış organik
-olarak devam ederse otomatik olarak `ACTIVE`'e geri döner.
-
-## Artımlı analiz
-
-Bir subject için `POST /analyze` her çağrıldığında motor, o subject'in **yalnızca henüz bir
-O-Series'e atanmamış** observation'larını işler; mevcut family'ler veritabanından
-(`family_key` — sabit, opak bir string) yüklenip artımlı olarak genişletilir. Bu tasarım iki
-nedenle tercih edilmiştir:
-
-1. **Kimlik kararlılığı** — bir family'nin `family_key`'i, üzerine yeni occurrence eklendikçe
-   asla değişmez; API tüketicileri (ör. dismiss edilmiş bir suggestion'ın anahtarı) kalıcı
-   kalır.
-2. **Basitlik** — tüm geçmişi her seferinde yeniden işlemek yerine yalnızca yeni kanıtı işlemek,
-   incremental-state tutarlılık hatalarının en büyük kaynağı olan "hangi family'nin hangi
-   occurrence'ı ne zaman gördüğü" karmaşasını ortadan kaldırır.
-
-Buna karşılık, bir family'ye dokunulduğunda o family'nin Habit/Planner/Risk/Benefit/Selection
-zinciri **baştan** hesaplanır (artımlı güncellenmez). Bu bilinçli bir tercihtir: bu katmanların
-girdisi (bir family'nin üye occurrence sayısı, tipik olarak onlarca-yüzlerce) küçüktür, tam
-yeniden hesaplama ölçüm yapılabilir bir maliyet artışı yaratmaz (bkz. `docs/evaluation.md` —
-130 subject / 15.000+ event tüm pipeline'dan ~13 saniyede geçiyor), buna karşılık artımlı
-delta-güncelleme (ör. "yeni bir occurrence geldiğinde median_gap_days'i nasıl güncellerim")
-kolayca tutarsızlığa yol açabilecek bir sınıf hataya kapı açar.
-
-Normalize edilmiş O-Series adımları ayrı bir tabloda **tutulmaz**: veritabanı yalnızca ham
-`observations` satırlarını saklar, `normalized_steps` her okumada aynı deterministik
-normalizasyon fonksiyonuyla yeniden hesaplanır. Bu, normalizasyon mantığının iki yerde (yazma
-ve okuma) bakımsız kalma riskini ortadan kaldırır.
-
-## Bilinen sınırlamalar
-
-* **Tek session içinde birden fazla bağımsız davranış.** O-Series sınırları yalnızca
-  `breaksEpisode` ve doğal tamamlanma noktalarına (submit/confirm başarı) dayanır. Bir
-  kullanıcı aynı session içinde tamamlanma sinyali üretmeden konu değiştirirse (ör. ayarları
-  gezip sonra ürün aramaya geçerse), bu iki davranış tek bir uzun O-Series içinde kalabilir.
-  Family eşleştirmesinin LCS tabanlı benzerlik ölçütü araya giren yabancı adımlara karşı büyük
-  ölçüde toleranslı olsa da, bu MVP kapsamında bilinçli bir basitleştirmedir; yeni bir
-  segmentasyon sinyali (ör. uzun bir `role=context` boşluğu) gerektiğinde eklenebilir.
-* **PostgreSQL üzerinde gerçek doğrulama yapılmadı.** Şema yalnızca portable SQLAlchemy
-  tipleriyle yazılmıştır ve SQLite üzerinde kapsamlı test edilmiştir; geliştirme ortamında
-  yerel bir PostgreSQL kurulumu bulunmuyordu.
-* **Çok-kiracılı proje konfigürasyonu dosya tabanlıdır.** `ProjectRegistry`,
-  `config_examples/` altındaki YAML dosyalarını okur; gerçek bir üretim sisteminde bu bir
-  config-upload/yönetim API'sine dönüşür. Bu MVP sınırlaması `_build_mapping`/
-  `_build_engine_overrides` (`awe.config.project_config`) değiştirilerek genişletilebilir.
-* **Resolver yetenekleri istek başına beyan edilir.** Backend, istemci uygulamanın belirli bir
-  state'e gerçekten programatik olarak gidip gidemeyeceğini bilemez (bölüm 78); bu bilgi
-  `POST /analyze` gövdesinde `ResolverCapabilities` olarak taşınır ve proje düzeyinde kalıcı bir
-  varsayılana bağlanmamıştır.
-* **Split/merge candidate üretimi yok.** Her family'nin cohesion'ı her occurrence kabulünde
-  güncel tutulur ve dışarıya açıktır, ama düşük cohesion'lı family'leri "split adayı" ya da
-  birbirine çok benzeyen iki family'yi "merge adayı" olarak işaretleyen ayrı bir batch
-  bakım işi yoktur. Değerlendirme veri kümesinde (`docs/evaluation.md`) gözlenen cohesion
-  her zaman 1.0 çıktığı için bu eksikliğin pratik etkisi ölçülememiştir; gerçek, uzun
-  ömürlü kullanıcı verisiyle cohesion zamanla düşerse bu bilinçli bir genişletme noktasıdır.
+1. **Artımlı state yok** (yukarıda bölüm 2) — büyük event geçmişlerinde Episode Candidate
+   Builder'ın O(n²) maliyeti her analiz çağrısında tekrar ödenir.
+2. **Exact fragmentation** (bölüm 9.3): fuzzy tolerans olmadığı için varyasyonlu gerçek
+   alışkanlıklar (ör. ara adım eklenmiş/çıkarılmış akışlar) ayrı family'lere bölünebilir.
+   Precision lehine bilinçli kabul edilmiş bir ödünleşim.
+3. **PostgreSQL hiç test edilmedi** — yalnızca portable SQLAlchemy tipleri kullanılır ama bu
+   ortamda gerçek Postgres'e karşı test edilmemiştir.
+4. **Suggestion lifecycle spesifikasyon dışı** (bölüm 9.11) — gösterim zamanlaması, aynı anda
+   kaç öneri gösterileceği, runtime target/screen validasyonu ayrı bir katman olarak
+   tasarlanmamıştır; mevcut basit dismiss/cooldown mekanizması korunmuştur.
+5. **Çok-kiracılı config hâlâ dosya tabanlı** (`ProjectRegistry`, `config_examples/`) — bir
+   config-upload API'si yoktur; bu MVP sınırlamasıdır.
+6. **Kimlik doğrulama yok** — API'de hiçbir auth/authorization mekanizması yoktur; herhangi bir
+   çağıran, bildiği bir `project_id`/`subject_id` için event gönderebilir ve öneri okuyabilir.

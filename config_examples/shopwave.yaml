@@ -1,7 +1,7 @@
 # ShopWave — e-ticaret uygulaması örnek entegrasyonu.
 #
 # Bu müşterinin raw telemetry formatı canonical Observation alanlarına yakın isimlendirme
-# kullanır (bölüm 10'daki örnek ham event ile aynı aile). Adapter mapping yine de gereklidir:
+# kullanır (bölüm 4'teki örnek ham event ile aynı aile). Adapter mapping yine de gereklidir:
 # AWE Core hiçbir zaman "eventId", "projectId" gibi müşteriye özel alan adlarını bilmez.
 project_id: shopwave
 display_name: "ShopWave — E-Ticaret Uygulaması"
@@ -16,16 +16,11 @@ mapping:
   timestamp_path: timestamp
   action_key_path: actionKey
   screen_path: screen
-  widget_path: widget
-  app_version_path: appVersion
-  duration_ms_path: durationMs
+  duration_path: durationMs
 
   source:
     path: source
     default: unknown
-  role:
-    path: role
-    default: action
   effect:
     path: effect
     default: unknown
@@ -39,21 +34,7 @@ mapping:
   target:
     ref_path: target.ref
 
-  parameter_fields:
-    recipient: metadata.recipient
-    amount: metadata.amount
-    coupon_code: metadata.couponCode
-
-  breaks_episode_path: breaksEpisode
-  breaks_episode_action_keys:
-    - logout
-    - cancel_checkout
-    - switch_account
-
-  assume_timezone: "Europe/Istanbul"
-
 engine_overrides:
   habit:
-    min_occurrences: 3
-    min_distinct_sessions: 2
-    min_distinct_days: 3
+    min_distinct_sessions: 3
+    min_distinct_days: 2

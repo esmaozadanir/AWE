@@ -1,136 +1,146 @@
-"""Raw event → canonical Observation dönüşümü.
+"""Raw event dict'ini canonical Observation'a çeviren tek yer (bölüm 6.1).
 
-AWE Core, bu modülden sonra hiçbir yerde müşterinin ham telemetry alan adlarını görmez
-(bölüm 31: "AWE Core müşterinin özel telemetry formatını bilmemelidir").
+Zorunlu bir alan üretilemediğinde veya timestamp naive geldiğinde event reddedilir
+(`AdapterValidationError`) — bölüm 6.1: "Zorunlu alan eksikse event reject edilir. Naive
+timestamp reject edilir." Eksik/geçersiz opsiyonel alanlar reddetmez; canonical `unknown`'a
+düşer ve `ObservationQuality` üzerinde bir kanıt/flag bırakır. Adapter alışkanlık, anchor
+veya risk kararı vermez — yalnızca canonicalization yapar.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from zoneinfo import ZoneInfo
+from typing import Any
 
-from awe.adapter.mapping import AdapterMapping, resolve_path
-from awe.domain.enums import (
-    ObservationEffect,
-    ObservationRole,
-    ObservationSource,
-    ObservationStatus,
-    ObservationTrigger,
-)
+from awe.adapter.mapping import AdapterMapping, FieldRule, resolve_path, resolve_path_with_presence
+from awe.domain.enums import ObservationEffect, ObservationSource, ObservationStatus, ObservationTrigger
 from awe.domain.observation import Observation, ObservationQuality
 
 
 class AdapterValidationError(ValueError):
-    """Raw event, mapping ile zorunlu alanları üretemeyecek kadar eksik/bozuk."""
+    """Zorunlu bir alan üretilemediğinde veya timestamp naive geldiğinde fırlatılır."""
 
 
-def _require_str(raw: dict, path: str, *, field_name: str) -> str:
+def _require_str(raw: dict[str, Any], path: str, *, field_name: str) -> str:
     value = resolve_path(raw, path)
-    if value is None or str(value).strip() == "":
-        raise AdapterValidationError(f"required field '{field_name}' missing at path '{path}'")
-    return str(value).strip()
+    if value is None:
+        raise AdapterValidationError(f"required field '{field_name}' is missing")
+    text = str(value).strip()
+    if not text:
+        raise AdapterValidationError(f"required field '{field_name}' is empty")
+    return text
 
 
-def _parse_timestamp(raw_value: str, mapping: AdapterMapping, warnings: list[str]) -> datetime:
-    normalized = raw_value.replace("Z", "+00:00") if raw_value.endswith("Z") else raw_value
+def _parse_timestamp(raw: dict[str, Any], mapping: AdapterMapping) -> datetime:
+    text = _require_str(raw, mapping.timestamp_path, field_name="timestamp")
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        raise AdapterValidationError(f"unparseable timestamp: {raw_value!r}") from exc
+        raise AdapterValidationError(f"invalid timestamp: {text!r}") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(mapping.assume_timezone))
-        warnings.append(f"naive_timestamp_assumed_{mapping.assume_timezone}")
+        raise AdapterValidationError(f"naive timestamp not allowed: {text!r}")
     return parsed.astimezone(UTC)
 
 
-def _resolve_target(raw: dict, mapping: AdapterMapping) -> str | None:
-    """Mapping target'ı hiç izlemiyorsa `None` (bilinmiyor), izliyor ama bu event'in raw
-    değeri boşsa `""` (açıkça hedef yok), aksi halde ref string'i döner (bkz.
-    `Observation.target` docstring'i)."""
-
-    if mapping.target.ref_path is None:
-        return None
-    ref_value = resolve_path(raw, mapping.target.ref_path)
-    return str(ref_value) if ref_value is not None else ""
-
-
-def _resolve_action(raw: dict, mapping: AdapterMapping) -> str:
-    raw_value = _require_str(raw, mapping.action_key_path, field_name="action")
-    return mapping.action_key_value_map.get(raw_value, raw_value)
+def _resolve_action(raw: dict[str, Any], mapping: AdapterMapping) -> str:
+    raw_action = _require_str(raw, mapping.action_key_path, field_name="action")
+    return mapping.action_key_value_map.get(raw_action, raw_action)
 
 
 def _resolve_field_rule(
-    raw: dict, rule_name: str, mapping: AdapterMapping, enum_type: type[StrEnum], warnings: list[str]
+    raw: dict[str, Any],
+    rule_name: str,
+    rule: FieldRule,
+    enum_type: type[StrEnum],
+    warnings: list[str],
 ) -> str:
-    rule = getattr(mapping, rule_name)
-    raw_value = resolve_path(raw, rule.path) if rule.path else None
+    if rule.path is None:
+        return rule.default
+    raw_value = resolve_path(raw, rule.path)
     if raw_value is None:
         return rule.default
-    raw_value = str(raw_value).strip().lower()
+    text = str(raw_value).strip().lower()
     if rule.value_map:
-        if raw_value in rule.value_map:
-            return rule.value_map[raw_value]
-        warnings.append(f"unmapped_{rule_name}_raw_value:{raw_value}")
+        if text in rule.value_map:
+            return rule.value_map[text]
+        warnings.append(f"unmapped_{rule_name}_raw_value:{text}")
         return rule.default
-    if raw_value in {member.value for member in enum_type}:
-        return raw_value
-    warnings.append(f"unmapped_{rule_name}_raw_value:{raw_value}")
+    valid_values = {member.value for member in enum_type}
+    if text in valid_values:
+        return text
+    warnings.append(f"unmapped_{rule_name}_raw_value:{text}")
     return rule.default
 
 
-def build_observation(raw: dict, mapping: AdapterMapping) -> Observation:
-    warnings: list[str] = []
+def _resolve_screen(raw: dict[str, Any], mapping: AdapterMapping) -> str | None:
+    if mapping.screen_path is None:
+        return None
+    value = resolve_path(raw, mapping.screen_path)
+    return str(value) if value is not None else None
 
+
+def _resolve_target(raw: dict[str, Any], mapping: AdapterMapping) -> tuple[str | None, bool]:
+    """`(target, missing_target_field)` döner. `ref_path` konfigüre edilmemişse bu bir veri
+    kalitesi sorunu değildir (mapping bilinçli olarak target izlemiyor): `(None, False)`.
+    `ref_path` konfigüre edilmiş ama raw payload'da anahtar hiç yoksa: `(None, True)` — "hedef
+    verisi bilinmiyor" (bölüm 3 kural 6). Anahtar var ve değeri `null`: `(None, False)` —
+    "açıkça hedef yok". Anahtar var ve değeri doluysa: `(str(value), False)`."""
+
+    if mapping.target.ref_path is None:
+        return None, False
+    value, present = resolve_path_with_presence(raw, mapping.target.ref_path)
+    if not present:
+        return None, True
+    if value is None:
+        return None, False
+    return str(value), False
+
+
+def _resolve_duration_ms(raw: dict[str, Any], mapping: AdapterMapping) -> tuple[int | None, bool]:
+    """`(duration_ms, invalid)` döner. Negatif veya sayısal olmayan değerler `None` yapılır
+    ve `invalid=True` işaretlenir (bölüm 6.1). `duration_ms` yalnızca audit amaçlıdır."""
+
+    if mapping.duration_path is None:
+        return None, False
+    value = resolve_path(raw, mapping.duration_path)
+    if value is None:
+        return None, False
+    try:
+        duration = int(value)
+    except (TypeError, ValueError):
+        return None, True
+    if duration < 0:
+        return None, True
+    return duration, False
+
+
+def build_observation(raw: dict[str, Any], mapping: AdapterMapping) -> Observation:
     event_id = _require_str(raw, mapping.event_id_path, field_name="event_id")
     project_id = _require_str(raw, mapping.project_id_path, field_name="project_id")
     subject_id = _require_str(raw, mapping.subject_id_path, field_name="subject_id")
-
-    session_id = resolve_path(raw, mapping.session_id_path)
-    has_session_id = session_id is not None and str(session_id).strip() != ""
-    session_id = str(session_id).strip() if has_session_id else f"synthetic:{event_id}"
-
-    raw_timestamp = _require_str(raw, mapping.timestamp_path, field_name="timestamp")
-    timestamp = _parse_timestamp(raw_timestamp, mapping, warnings)
-
+    session_id = _require_str(raw, mapping.session_id_path, field_name="session_id")
+    timestamp = _parse_timestamp(raw, mapping)
     action = _resolve_action(raw, mapping)
 
-    source = ObservationSource(_resolve_field_rule(raw, "source", mapping, ObservationSource, warnings))
-    role = ObservationRole(_resolve_field_rule(raw, "role", mapping, ObservationRole, warnings))
-    effect = ObservationEffect(_resolve_field_rule(raw, "effect", mapping, ObservationEffect, warnings))
+    warnings: list[str] = []
+    source = ObservationSource(_resolve_field_rule(raw, "source", mapping.source, ObservationSource, warnings))
     trigger = ObservationTrigger(
-        _resolve_field_rule(raw, "trigger", mapping, ObservationTrigger, warnings)
+        _resolve_field_rule(raw, "trigger", mapping.trigger, ObservationTrigger, warnings)
     )
-    status = ObservationStatus(_resolve_field_rule(raw, "status", mapping, ObservationStatus, warnings))
+    effect = ObservationEffect(_resolve_field_rule(raw, "effect", mapping.effect, ObservationEffect, warnings))
+    status = ObservationStatus(_resolve_field_rule(raw, "status", mapping.status, ObservationStatus, warnings))
 
-    screen = resolve_path(raw, mapping.screen_path) if mapping.screen_path else None
-    screen = str(screen).strip() if screen is not None else None
-    widget = resolve_path(raw, mapping.widget_path) if mapping.widget_path else None
-    widget = str(widget).strip() if widget is not None else None
-
-    target = _resolve_target(raw, mapping)
-
-    parameters: dict[str, str] = {}
-    for canonical_name, path in mapping.parameter_fields.items():
-        value = resolve_path(raw, path)
-        if value is not None:
-            parameters[canonical_name] = str(value)
-
-    breaks_episode = False
-    if mapping.breaks_episode_path is not None:
-        breaks_episode = bool(resolve_path(raw, mapping.breaks_episode_path))
-    if action in mapping.breaks_episode_action_keys:
-        breaks_episode = True
-
-    app_version = resolve_path(raw, mapping.app_version_path) if mapping.app_version_path else None
-    app_version = str(app_version) if app_version is not None else None
+    screen = _resolve_screen(raw, mapping)
+    target, missing_target_field = _resolve_target(raw, mapping)
+    duration_ms, invalid_duration = _resolve_duration_ms(raw, mapping)
 
     quality = ObservationQuality(
         has_screen=screen is not None,
-        has_widget=widget is not None,
-        has_session_id=has_session_id,
-        is_synthetic_session=not has_session_id,
-        mapping_warnings=tuple(warnings),
+        missing_target_field=missing_target_field,
+        invalid_duration=invalid_duration,
+        warnings=tuple(warnings),
     )
 
     return Observation(
@@ -139,18 +149,14 @@ def build_observation(raw: dict, mapping: AdapterMapping) -> Observation:
         subject_id=subject_id,
         session_id=session_id,
         timestamp=timestamp,
-        source=source,
         action=action,
-        role=role,
-        effect=effect,
+        source=source,
         trigger=trigger,
-        screen=screen,
-        widget=widget,
-        target=target,
-        parameters=parameters,
+        effect=effect,
         status=status,
-        breaks_episode=breaks_episode,
-        app_version=app_version,
+        screen=screen,
+        target=target,
+        duration_ms=duration_ms,
         mapping_version=mapping.mapping_version,
         quality=quality,
     )

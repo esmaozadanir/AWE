@@ -1,5 +1,5 @@
 """Adapter mapping sözleşmesi: müşteriye özel raw event alanlarının canonical alanlara
-deklaratif olarak eşlenmesi (bölüm 31-32).
+deklaratif olarak eşlenmesi (bölüm 6.1, 8).
 
 AWE Core, bu modülü kullanarak hiçbir müşteriye özel Python kodu yazmadan farklı raw
 telemetry formatlarını canonical Observation'a çevirir. Yeni bir müşteri entegrasyonu,
@@ -15,12 +15,25 @@ from typing import Any
 def resolve_path(raw: dict[str, Any], path: str) -> Any:
     """Nokta ayraçlı bir path ile iç içe sözlükten değer okur (ör. 'data.screen')."""
 
+    value, _ = resolve_path_with_presence(raw, path)
+    return value
+
+
+def resolve_path_with_presence(raw: dict[str, Any], path: str) -> tuple[Any, bool]:
+    """`resolve_path` ile aynı, ama anahtarın hiç var olmadığını (`False`) anahtarın var
+    olup değerinin `null` olduğundan (`True`, değer `None`) ayırt eder. Bu ayrım yalnızca
+    `target` alanı için gereklidir (bölüm 3 kural 6: `null` ≠ "alan hiç gönderilmedi")."""
+
     current: Any = raw
-    for part in path.split("."):
+    parts = path.split(".")
+    for part in parts[:-1]:
         if not isinstance(current, dict) or part not in current:
-            return None
+            return None, False
         current = current[part]
-    return current
+    last = parts[-1]
+    if not isinstance(current, dict) or last not in current:
+        return None, False
+    return current[last], True
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,29 +77,15 @@ class AdapterMapping:
     timestamp_path: str
     action_key_path: str
     action_key_value_map: dict[str, str] = field(default_factory=dict)
-    """Ham action string'ini normalize etmek için opsiyonel eşleme (bölüm 31: action normalization).
-    Eşleşme yoksa ham değer aynen action_key olarak kullanılır — engine action_key'in kendi
-    business anlamını tahmin etmez (bölüm 17)."""
+    """Ham action string'ini normalize etmek için opsiyonel eşleme. Eşleşme yoksa ham değer
+    aynen `action` olarak kullanılır — engine action'ın kendi business anlamını tahmin etmez."""
 
     screen_path: str | None = None
-    widget_path: str | None = None
-    app_version_path: str | None = None
-    duration_ms_path: str | None = None
+    duration_path: str | None = None
 
-    source: FieldRule = field(default_factory=lambda: FieldRule(default="client"))
-    role: FieldRule = field(default_factory=lambda: FieldRule(default="action"))
+    source: FieldRule = field(default_factory=lambda: FieldRule(default="unknown"))
     effect: FieldRule = field(default_factory=lambda: FieldRule(default="unknown"))
     trigger: FieldRule = field(default_factory=lambda: FieldRule(default="unknown"))
     status: FieldRule = field(default_factory=lambda: FieldRule(default="unknown"))
 
     target: TargetRule = field(default_factory=TargetRule)
-
-    parameter_fields: dict[str, str] = field(default_factory=dict)
-    """canonical parametre adı -> raw path. Metadata'dan yalnızca burada açıkça
-    whitelist'lenen alanlar okunur (bölüm 29)."""
-
-    breaks_episode_path: str | None = None
-    breaks_episode_action_keys: frozenset[str] = frozenset()
-
-    assume_timezone: str = "UTC"
-    """Ham timestamp naive geldiğinde varsayılan olarak atanacak timezone."""

@@ -1,190 +1,110 @@
 # Motor Tasarım Kararları
 
-Bu doküman, AWE'nin kod okunduğunda hemen belli olmayan tasarım kararlarının gerekçelerini
-toplar. Amaç, gelecekte bu koda dokunacak birinin "neden böyle yapılmış" sorusuna spesifikasyon
-maddesi numarası aramadan cevap bulabilmesidir.
+Bu doküman, kod okunduğunda hemen belli olmayan tasarım kararlarının gerekçelerini toplar.
+Özellikle spesifikasyonun (`AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md`) açıkça bırakmadığı boşlukları
+nasıl doldurduğumuzu ve önceki tasarımdan bilinçli olarak nerede ayrıldığımızı belgeler.
 
-## Tek analiz kapsamı: projectId + subjectId
+## 1. Önceki tasarıma göre bilinçli tersine dönüşler
 
-AWE aynı anda farklı uygulamalardan gelen event'leri birleştirip analiz eden bir sistem
-değildir. Her analiz `projectId + subjectId` kapsamında çalışır ve iki farklı projenin
-event'leri hiçbir zaman aynı Behavior Family içinde karışmaz. Bunun nedeni teknik değil
-üründür: iki farklı uygulamadaki davranışların "aynı alışkanlık" sayılması anlamsızdır.
-Evrensellik burada "farklı uygulamaların verisini karıştırmak" değil, "aynı Core algoritmasının
-farklı Adapter'larla farklı uygulamalara ayrı ayrı uygulanabilmesi" anlamına gelir.
+Bu motor bir önceki oturumda yeniden tasarlanmış bir sınıflandırma katmanının üzerine inşa
+edildi. Yeni spesifikasyon iki noktada o tasarımın **tam tersini** söylüyor; ikisi de burada
+harfiyen uygulandı:
 
-## Adapter sınırı neden var
+- **`source`**: Önceki tasarım "source hiçbir zaman gerçek bir kullanıcı ACTION'ını dışlamak
+  için kullanılmaz" diyordu. Yeni spesifikasyon (bölüm 6.2) `source != "client" → CONTEXT`
+  der — yani server/system kaynaklı bir event artık asla ACTION olamaz, trigger ne olursa
+  olsun.
+- **`status`**: Önceki tasarım `status != success → IGNORE` idi (ilk kontrol). Yeni
+  spesifikasyon (bölüm 3 kural 4, bölüm 6.2) `status`u sınıflandırmadan tamamen çıkarır —
+  fail/cancel bir ACTION'ı diziden atmaz. Bunun yerine bir occurrence'ın `RESOLVED` mü
+  `ATTEMPT_ONLY` mi olduğu Anchor Resolver'da (bölüm 6.9) en az bir success var mı diye
+  kontrol edilerek belirlenir — status artık "bu bir action mı" sorusuna değil "bu action
+  başarılı oldu mu" sorusuna cevap verir.
 
-Core Engine, hiçbir zaman bir müşterinin ham telemetry alan adlarını (`eventId` mi `evtId` mi,
-`actionKey` mi `event_type` mı) bilmemelidir. Bu ayrım olmadan, her yeni müşteri entegrasyonu
-motor koduna dokunmayı gerektirir ve "domain-independent core" iddiası kağıt üzerinde kalır.
-`AdapterMapping`, alan eşlemesini ve değer normalizasyonunu (`value_map`) tamamen deklaratif
-tutarak bunu zorunlu kılar: yeni bir müşteri, yeni bir YAML dosyasıdır, yeni bir Python modülü
-değil. `config_examples/` altındaki üç farklı ham format (ShopWave'in canonical-benzeri
-yapısı, LearnLoop'un `eventUid`/`learnerId` yapısı, TaskFlow'un düz `id`/`workspace` yapısı) bu
-ayrımın gerçekten çalıştığını gösterir.
+## 2. Spesifikasyonun boş bıraktığı, burada doldurulan noktalar
 
-## `source` neden korunuyor
+- **`USER_TRIGGERS` tanımı** (bölüm 6.2): Classifier sözde kodu `trigger in USER_TRIGGERS`
+  der ama bu kümeyi hiçbir yerde tanımlamaz. Bölüm 4'ün trigger sözlüğünden `automatic` ve
+  `unknown` çıkarılarak türetildi — geri kalan tüm değerler kullanıcının doğrudan girdisidir
+  (bkz. `awe.adapter.classification.USER_TRIGGERS`).
+- **`shortcut` trigger değeri**: Bölüm 4'ün trigger sözlüğünde yok. Olmadan, bir kısayolun
+  kendi tetiklediği event'in organik kullanım kanıtı olarak sayılmasını engelleyecek hiçbir
+  mekanizma kalmıyordu (eski tasarımın red line #13'üne karşılık gelen bir kendini-besleme
+  riski). `shortcut` kasıtlı bir superset eki olarak eklendi; sınıflandırma kurallarını
+  etkilemez (`USER_TRIGGERS`'a dahildir, ACTION üretir), yalnızca
+  `awe.habit.assessment.evaluate_habit`'in organik kanıt sayımını etkiler.
+- **Anchor STRONG/MEDIUM/WEAK ayrımı** (bölüm 6.9): Belge yalnızca WEAK'i formülle tanımlar
+  (route/open-only iz + stabil post-view). STRONG/MEDIUM ayrımı, belgenin üç kanıt
+  kaynağından türetildi: pozisyon exact target taşıyorsa STRONG, yalnızca outcome-evidence
+  effect taşıyorsa MEDIUM.
+- **`TargetVariantKind.VARIABLE_TARGET` yorumu** (bölüm 6.6): Belge dört durumu net bir eksen
+  üzerinde tanımlamaz. Burada bir fingerprint'in kendi İÇİNDEKİ distinct non-null değer
+  sayısına bakılır — bir occurrence'ın kendi adımları birden fazla farklı hedefe değiniyorsa
+  (ör. "workspace_1" ve "report_9" aynı occurrence içinde) bu VARIABLE_TARGET'tır ve Shortcut
+  Intent Builder'ın compound-identity reddiyle (bölüm 6.12) doğrudan örtüşür. İki AYRI
+  occurrence farklı ama kendi içinde tutarlı hedeflere sahipse (course_42 vs course_17), bunlar
+  zaten farklı fingerprint'ler oldukları için ayrı ayrı FIXED_TARGET variant'lara ayrılır.
+- **Risk vektörünün yorumlanması** (bölüm 6.13): Belge yalnızca alan adlarını verir
+  (`policy, plan_surface, execution_exposure, interaction_guard, observed_goal_sensitivity,
+  reliability, data_quality, reasons`), tiplerini/formüllerini vermez. Burada:
+  - `policy` = anchor'ın effect'inin proje konfigürasyonundaki güvenlik sınıfı.
+  - `observed_goal_sensitivity` = Scope'a dahil OLMAYAN, anchor'dan sonra gözlenen adımların
+    en hassas policy'si — kısayolun neyi kasıtlı olarak dışarıda bıraktığını gösteren, salt
+    açıklanabilirlik amaçlı bir alan (BLOCK nedeni değildir; bu rol zaten `policy`'de).
+  - `execution_exposure` her zaman `NONE`'dır (EXECUTE modu hiç yoktur).
+  - `reliability` = anchor pozisyonundaki gözlenen success/fail/cancel oranları.
+- **Episode Candidate azami uzunluğu** (bölüm 6.4): Belge açıkça "implementer kararı" olarak
+  bırakır ("Eski MVP'deki max=8 korunacaksa..."). `EpisodeConfig.max_symbols=8` olarak
+  sabitlendi, konfigüre edilebilir bırakıldı.
+- **Risk'in `mixed_outcome_rate_threshold`, `min_data_quality_for_allow` eşikleri**: Belge bu
+  eşiklerin var olması gerektiğini ima eder (`MIXED_OBSERVED_OUTCOMES`, "kritik quality flag")
+  ama sayı vermez. Sırasıyla `0.3` ve `0.5` olarak seçildi; `RiskConfig` üzerinden proje
+  başına override edilebilir.
 
-`source` (client/server/system), bir event'in hangi teknik taraftan geldiğini söyler; iş
-anlamı taşımaz. Bunu atmak cazip görünebilir ama iki gerçek kanıt sınıfını kaybettirir:
-sunucu tarafından üretilen `outcome`/`failure` event'leri (kullanıcının kendisi tetiklemedi
-ama davranışın sonucunu gösterir) ve sistem tarafından üretilen lifecycle event'leri (gerçek
-kullanıcı niyeti taşımaz, Family core'unu gereksiz bölmemeli). `source=server` event'lerini
-körü körüne atmak yerine, güvenilir bir korelasyon yoksa (ör. sessionId eşleşmiyor) bu
-event'ler zaten kendi tekil "sentetik" session'larına düşer ve hiçbir client behavior'a
-rastgele bağlanmaz — bkz. `awe.adapter.observation_builder`'daki `synthetic:{event_id}`
-fallback'i.
+## 3. Eski tasarımdan kalan, artık anlamsızlaşan kavramların kaldırılması
 
-## `widget` neden ayrı tutuluyor ve neden Behavior kimliği değil
+- **Fuzzy family matching** (weighted-LCS benzerlik, IDF ayrıştırıcı ağırlıklandırma,
+  ambiguity margin, core/optional bigram ilişkileri, cohesion skoru): Bölüm 6.5 "Fuzzy merge
+  yoktur" der. Family artık deterministik exact-equality gruplamasıdır; bu makine tamamen
+  kaldırıldı (`families/similarity.py`, `families/weighting.py` silindi).
+- **Retry/detour normalizasyonu** (`series/normalization.py`): Aynı gerekçeyle kaldırıldı —
+  yeni O-Series Builder (bölüm 6.3) tekrarlanan adımları veya geri-navigasyonu sıkıştırmaz;
+  bunlar exact sembol dizisine oldukları gibi girer ve gerekirse family'yi böler (bölüm 9.3).
+- **Çok alanlı PREFILL binding'leri** (`FieldBinding`, `planner/state_reconstruction.py`,
+  `planner/candidates.py`): Yeni Shortcut Intent yalnızca tek bir `target: str | None` taşır
+  (bölüm 6.12); "workspace_1 + report_9" gibi bileşik kimlikler taşınamaz, `UNSUPPORTED`
+  olur. `ResolverContract` (client capability sözleşmesi, `accepted_bindings` dahil) bu
+  yüzden anlamını yitirdi ve kaldırıldı — yeni belge zaten böyle bir kavramdan hiç bahsetmez.
+- **Fallback plan**: Bir `TargetVariant`'ın en fazla bir Anchor'ı (dolayısıyla en fazla bir
+  Shortcut Intent'i) olabildiği için "birincil + fallback plan" kavramı da anlamsızlaştı;
+  `Suggestion.fallback_intent_ids` kaldırıldı.
+- **`SuggestionState.ELIGIBLE`**: Eski `lifecycle/transitions.py` bu durumu hiçbir zaman
+  üretmiyordu (kod incelemesiyle doğrulandı) — tanımlı ama ölü bir enum değeriydi. Yeni
+  tasarımda hiç yok.
+- **İki günlük burst artık Habit sayılıyor**: Eski `min_distinct_days` varsayılanı 3'tü; yeni
+  spesifikasyonun (bölüm 6.7) kapısı `distinct day >= 2`. Bu, "iki farklı günde, session
+  sayısı ne olursa olsun, artık HABIT_DETECTED üretir" sonucunu doğurur — belge yalnızca
+  tek-gün burst'ü açıkça reddeder (bölüm 9.8); iki-gün durumu için implementer'a bırakılmış
+  bir eşik gevşemesidir, sessizce geri alınmadı.
+- **`widget_rename`/`parameter_drift` sentetik profilleri** (`awe.testing.generators`)
+  kaldırıldı: `widget` alanı artık yok (test ettikleri "kimlikten hariç tutulan alan" kavramının
+  analogu kalmadı — tam tersine `screen` artık kimliğin PARÇASI); `parameter_drift`'in test
+  ettiği `FieldBinding` recent-drift kavramı yeni tasarımda yok, `target_variable` zaten aynı
+  temel senaryoyu (hedef değişkenliği) kapsıyor.
 
-`screen` ve `widget`'ı erken birleştirmek (`screen + ":" + widget`) hem bilgi kaybettirir hem
-de widget'ı fiilen kimliğin bir parçası yapar. Oysa widget, bir UI redesign'ında sıkça değişir
-(`security_button` → `security_card`); aynı davranış aynı kalır. Bu yüzden Family
-karşılaştırmasının atomik birimi (`Symbol`) yalnızca `(action, effect)` çiftidir — `screen`
-ve `widget` ayrı, yardımcı bağlamsal kanıt olarak taşınır (`BehaviorStep` üzerinde), ama
-karşılaştırma sembolünün parçası değildir. Bu tek karar, widget rename testinin geçmesini,
-generic widget'ların (`primary_button`) yanlışlıkla ayırt edici sayılmamasını ve aynı zamanda
-`target.ref`/parametre değerlerinin de kimliğe karışmamasını aynı anda sağlar.
+## 4. Korunan altyapı (spesifikasyonun ele almadığı alanlar)
 
-## `destination` ve ağır capability manifest neden yok
+Spesifikasyon yalnızca Adapter→Selector zincirini tanımlar; persistence şeması, API sözleşmesi,
+config-yükleme mekanizması, structured logging ve suggestion lifecycle'ı ele almaz (bölüm 9.10,
+9.11). Bu alanlarda mevcut, çalışan mekanizma korunmuş, yalnızca yeni veri şekline uyarlanmıştır:
 
-`destination` bir mimari kavram olarak asla oluşturulmadı; bunun yerine dahili olarak
-`ShortcutAnchor` kullanılır — family core sırasındaki bir **sembol** referansı, bir index değil
-(bkz. aşağıda). Benzer şekilde, istemcinin neyi destekleyip desteklemediğini bilmek için ağır
-bir capability-manifest sistemi kurulmadı; `ResolverContract` yalnızca beş alanlı minimal bir
-sözleşmedir (`supports_navigate`, `supports_prefill`, `accepted_bindings`, `requires_review`,
-`supports_runtime_validation`). Backend geçmiş loglardan istemcinin belirli bir state'e
-gerçekten gidebileceğini bilemez; bu bilgiyi tahmin etmeye çalışmak yerine istemciden açıkça
-istenir.
-
-## Anchor neden bir index değil
-
-Optional adımlar (bölüm 41'deki detour, bölüm 47'deki opsiyonel prefix) bir occurrence'ın uzun
-diğerinin kısa olmasına yol açar; sabit bir index (`sequence[4]`) occurrence'lar arasında farklı
-şeylere işaret eder. Bunun yerine `ShortcutAnchor.symbol`, family core'undaki bir `(action,
-effect)` referansıdır; her occurrence'ta kendi normalize dizisi içinde bu sembol aranarak
-çözülür (`resolve_anchor_step_index`). Sembol birden fazla kez görülüyorsa (loop), İLK görülme
-noktası "bu yapısal adıma ilk ulaşım" anı olarak alınır.
-
-## Family eşleştirmesi neden tam alignment/conformance değil
-
-PM4Py'nin trace variant ve Directly-Follows Graph fikirleri değerlendirildi, ama tam Petri-net
-tabanlı alignment/conformance checking kasıtlı olarak kullanılmadı. Loop içeren gerçek
-kullanıcı akışlarında birden fazla eşit-maliyetli alignment bulunabilir; hangisinin seçildiği
-implementasyon detayına bağlı hale gelir ve bu da "deterministik" ve "açıklanabilir" ilkeleriyle
-çelişir. Bunun yerine sınırlı, deterministik bir model kullanılır: family, sınırlı sayıda temsilci
-variant tutar (`FamilyVariant`, exact-sequence compression); bu variant'lar arasındaki
-ardışık sembol çiftlerinden (bigram) bir "core/optional" ilişki tablosu türetilir
-(`compute_relationships`). Yeni bir occurrence, ayrıştırıcı-ağırlıklı LCS benzerliği VE
-core-bigram kapsaması birlikte sağlandığında kabul edilir. Core tablo her kabulden sonra
-ailenin BİRİKMİŞ tüm variant'ları üzerinden yeniden hesaplanır — yalnızca en son eklenen üyeye
-göre değil. Bu, "chaining" sürüklenmesini (art arda yalnızca bir önceki üyeye benzeyen
-occurrence'ların zamanla alakasız bir davranışa doğru kaymasını) önler: bir sembol çiftinin
-"core" sayılması ailenin tüm üyeleri arasındaki çoğunluk kapsamına bağlıdır.
-
-## Discriminative weighting neden gerekli, ve nereye kadar
-
-Bir token subject'in neredeyse bütün davranışlarında görülüyorsa (ortak bir başlangıç ekranı
-gibi), benzerlik skorunu şişirmemesi için düşük ağırlık alır (IDF-benzeri, add-one smoothing
-ile). Ancak adversarial test sırasında şu gerçek kusur bulundu: bir subject'in gözlenen
-davranışının TAMAMI tek bir Habit'e aitse (çok yaygın durum), o Habit'in kendi çekirdek
-sembolleri de "her yerde görülüyor" sayılıp ham IDF tarafından sıfıra çekiliyor — bu da nadir
-görülen tek seferlik bir sapmayı (ör. bir kerelik detour) asıl çekirdekten daha "ayırt edici"
-gösterip benzerlik hesabını tersine çeviriyordu (bkz. `tests/regression/
-test_adversarial_edge_cases.py::test_first_seed_outlier_does_not_prevent_later_normal_occurrences_from_joining`).
-Düzeltme iki parçalıdır: (1) ağırlık asla `min_symbol_weight` alt sınırının altına inmez, (2)
-bir family'nin henüz tek bir (doğrulanmamış) temsilci variant'ı varsa VE yeni aday o tek
-variant'ın sırayı-koruyan gerçek bir alt dizisiyse (yeni sembol getirmiyor), kapsama ve
-benzerlik eşiği o tek örnek için gevşetilir. Bu gevşetme kasıtlı olarak dar tutulmuştur: aday
-tohuma yeni semboller getiriyorsa (gerçek bir sapma, bölüm 58'deki chaining senaryosu gibi)
-gevşetme uygulanmaz — aksi halde chaining ve ortak-başlangıç-sembolü korumaları yeniden açılırdı
-(ilk düzeltme denemesi tam olarak bu hataya düştü ve regresyon testleriyle yakalandı).
-
-## `target.ref` ve parametre değerleri neden family kimliğinin dışında
-
-Aynı davranış farklı hedeflerle gerçekleştirilebilir (`FLOW target=A`, `FLOW target=B`, `FLOW
-target=C` hepsi aynı family olmalı); target üzerinden ayrım yapmak support'un gereksiz
-parçalanmasına yol açar. Target'ın kararlılığı (stabil mi, değişken mi) Family katmanının değil
-Planner/PREFILL katmanının sorusudur — `FieldBinding` üzerinden, yalnızca bir plan adayı için
-"bu alanı prefill etmek güvenli mi" sorusuna cevap verirken devreye girer.
-
-## Regularity neden hard gate değil, eski burst formülü neden kullanılmadı
-
-Klasik `1 - uniqueDays/support` formülü günde birden fazla kez kullanılan gerçek bir Habit'i
-(ör. günde 5-10 session) burst sanabilir. Bunun yerine burst reddi tamamen `minDistinctDays` ve
-`minDistinctSessions` sayımına dayanır — bir oran formülüne değil. Bu ayrım şunu sağlar: bir
-gate'in kendi boyutu (gün/session sayısı) yetersizken toplam occurrence sayısı zaten eşiği
-geçmişse ("zaten yoğun biçimde denendi ama yalnızca bir/iki günde yoğunlaştı"), bu NOT_HABIT
-sayılır; occurrence sayısı da eşiğin altındaysa aile henüz gençtir ve PENDING_EVIDENCE'ta kalır.
-Regularity ise haftalık/aylık/düzensiz-ama-gerçek Habit'leri reddetmemesi için hiçbir zaman
-sert bir eşik olarak kullanılmaz; yalnızca açıklanabilirlik amaçlı bir "habit_strength" alt
-bileşenidir ve anlamlı örneklem yoksa (yetersiz gün sayısı) `None` kalır — asla `1.0`'a
-düşürülmez.
-
-## Liveness neden mutlak gün sayısına değil gözlenen periyoda göre
-
-Sabit bir "N gün kullanılmadıysa STALE" kuralı, aylık bir Habit için normal olan bir sessizliği
-günlük bir Habit için gerçek bir terk edilme ile aynı kefeye koyar. Bunun yerine
-`stalenessRatio = son_kullanımdan_bu_yana_geçen_gün / beklenen_boşluk` hesaplanır;
-`beklenen_boşluk` bu Habit'in kendi gözlenen medyan gün-arası boşluğundan türetilir. Böylece
-aylık bir Habit ancak gerçekten aylık periyodunun birkaç katı sessiz kaldığında stale sayılır.
-
-## PREFILL neden event replay değil
-
-PREFILL, gözlenen event'leri otomatik olarak simüle etmez. Her occurrence'ta anchor öncesi
-canonical state (target + whitelist'lenmiş parametreler) çıkarılır, family seviyesinde bu
-alanların dominance/coverage/sample_size istatistiği tutulur (`FieldBinding`) ve yalnızca
-yeterince kararlı olanlar (STABLE) prefill önerisine dahil edilir. Kullanıcı, form önceden
-doldurulmuş halde devam eder ve son onayı yine kendisi verir.
-
-## Risk veto neden tek bir ağırlıklı skora indirgenmiyor
-
-Habit, Risk ve Benefit kasıtlı olarak bağımsız kavramlardır ve tek bir final skorda
-birleştirilmez. `evaluate_risk`, Benefit'i hiçbir zaman görmez; bir plan `BLOCK` aldığında bu
-karar Benefit ne kadar yüksek olursa olsun geçersiz kılınamaz — `select_family_plan` bu kararı
-sabit bir öncelik sırasıyla (`BLOCK > DOWNGRADE_TO_NAVIGATE > REDUCE_BINDINGS >
-ALLOW_WITH_REVIEW > ALLOW`) uygular. Bu invariant hem birim testleriyle hem de
-`tests/property/test_selection_invariants.py` içinde rastgele (Hypothesis ile üretilen, 0'dan
-10.000'e kadar) Benefit değerleriyle doğrulanır.
-
-## Motor seviyesinde sabit bir suggestion üst sınırı neden yok
-
-Bir kullanıcının dört bağımsız, gerçek Habit'i varsa dördü de eligible kalmalıdır; motor
-"en fazla 3 öneri göster" gibi keyfi bir üst sınır koymaz — kaç tanesinin gösterileceği bir UI
-kararıdır. Anormal derecede yüksek bir suggestion sayısı (ör. 25+) motor sağlığı açısından bir
-uyarı sinyalidir (fragmentation, zayıf dedupe) ve `scripts/evaluate_engine.py`'nin ürettiği
-sağlık metrikleriyle (families_per_subject, eligible_suggestions_per_subject) izlenir — sert
-bir kesme ile değil.
-
-## Shortcut kullanımı neden organic kanıt sayılmıyor
-
-Bir Habit'ten üretilen shortcut kullanılmaya başlandığında (`trigger=shortcut`), bu kullanım
-organik tekrar kanıtına eklenirse öneri kendi kanıtını yapay olarak büyütür — bir geri besleme
-döngüsü oluşur. Bu yüzden `has_shortcut_trigger=true` olan occurrence'lar
-`organic_occurrences`'a hiçbir zaman dahil edilmez; ayrı bir `shortcut_utility_occurrences`
-sayacında tutulur (açıklanabilirlik için, ama Habit kararını hiç etkilemez).
-
-## Bulunan ve düzeltilen gerçek hatalar
-
-Adversarial review sırasında (bölüm 139) implementasyonun kendisini kırmaya çalışırken iki
-gerçek hata bulundu; ikisi de `tests/regression/` altında kalıcı test olarak eklendi:
-
-1. **Aşırı "back" basışları uydurma sembol sızdırıyordu.** Bounded detour normalizasyonu, geri
-   dönülecek bir state kalmadığında (yığın boşaldığında) fazladan `navigate_back` event'ini
-   literal bir adım olarak normalize edilmiş diziye ekliyordu. `back` kendi başına anlamlı bir
-   davranış adımı değildir; düzeltme bu durumda event'i sessizce (ama `detour_step_count`'a
-   yansıyacak şekilde) yutar.
-2. **İlk occurrence atipikse (bölüm 51 yukarıda anlatılan discriminative weighting kusuruyla
-   birleşince) sonraki gerçek occurrence'lar reddediliyordu.** Yukarıda anlatıldı.
-
-Ayrıca geliştirme sırasında (adversarial review'dan önce) şu ikisi de bulunup düzeltildi:
-
-3. **`seed_family`, ilk occurrence'ı `member_series_ids`'e eklemiyordu.** Bu, family'nin
-   ilk üyesinin Risk katmanındaki `anchor_coverage` gibi hesaplarda sayılmamasına yol açardı.
-   `seed_family` artık `accept_series` ile aynı iç mekanizmayı kullanır.
-4. **SQLite, `DateTime(timezone=True)` sütunlarında dahi timezone bilgisini kalıcı saklamaz.**
-   Okuma sırasında naive bir datetime dönebilir, bu da aware/naive karşılaştırmalarında
-   `TypeError` üretir. Çözüm, hem yazarken UTC'ye normalize eden hem de okurken eksik tzinfo'yu
-   tamamlayan bir `UTCDateTime` tip dekoratörüdür (`awe.persistence.types`) — kod tabanının geri
-   kalanı asla naive bir datetime görmez.
+- Persistence hâlâ yalnızca portable SQLAlchemy tipleri kullanır; tek migration dosyası yerinde
+  düzenlenir (gerçek dağıtılmış bir veritabanı yoktur).
+- `ProjectRegistry` hâlâ dosya tabanlıdır (`config_examples/`); config-upload API'si yoktur.
+- Suggestion lifecycle (`dismiss`/cooldown/revive) aynı state machine'i kullanır; yalnızca
+  girdi şekli (artık `HabitEvidence.last_seen_at` üzerinden kendi basit staleness eşiğini
+  hesaplar) yeni pipeline'a uyarlanmıştır — `LifecycleConfig.stale_after_days` (varsayılan 30)
+  bu amaçla eklendi; eski `stale_after_missed_cycles` alanı zaten hiç tüketilmiyordu (ölü
+  konfigürasyon alanıydı, kod incelemesiyle doğrulandı) ve kaldırıldı.
+- API'de hâlâ hiçbir kimlik doğrulama/yetkilendirme mekanizması yoktur — bu, önceki
+  incelemede de flagged edilmiş, henüz kapatılmamış bir MVP açığıdır.

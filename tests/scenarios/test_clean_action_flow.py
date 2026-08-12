@@ -1,19 +1,20 @@
 """Ham event → canonical Observation → ACTION/CONTEXT/IGNORE → temiz action akışı zincirinin
-uçtan uca doğrulaması.
+uçtan uca doğrulaması (Adapter → Classifier → Ordering → O-Series Builder, henüz Family'ye
+girmeden).
 
-Tek bir gerçekçi session örneği: bir kullanıcı uygulamayı açar (lifecycle context), kursları
-açar, kurs listesini görür (context), listeyi kaydırır (ignore), bir kursu açar, arka planda
-ilerleme senkronize edilir (ignore), dersi başlatır. Beklenen temiz action akışı yalnızca
-gerçek kullanıcı eylemlerinden oluşur: `open_courses → open_course → start_lesson`.
+Tek bir gerçekçi session: kullanıcı kursları açar (ACTION), kurs listesini görür (CONTEXT),
+listeyi kaydırır (IGNORE — passive), bir kursu açar (ACTION), arka planda bir senkronizasyon
+event'i gelir (IGNORE — effect=none), dersi başlatır (ACTION). Temiz akış yalnızca üç ACTION
+adımını içermelidir.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from awe.adapter import AdapterMapping, FieldRule, build_observation
-from awe.config import default_engine_config
-from awe.ordering import order_session
+from awe.adapter import build_observation
+from awe.adapter.mapping import AdapterMapping, FieldRule, TargetRule
+from awe.ordering import group_by_session, order_session
 from awe.series import extract_series
 
 _MAPPING = AdapterMapping(
@@ -25,50 +26,71 @@ _MAPPING = AdapterMapping(
     timestamp_path="timestamp",
     action_key_path="actionKey",
     screen_path="screen",
-    trigger=FieldRule(path="trigger", default="unknown"),
+    source=FieldRule(path="source", default="unknown"),
     effect=FieldRule(path="effect", default="unknown"),
+    trigger=FieldRule(path="trigger", default="unknown"),
     status=FieldRule(path="status", default="unknown"),
+    target=TargetRule(ref_path="target"),
 )
 
-_BASE = datetime(2026, 2, 1, 9, tzinfo=UTC)
+_BASE = datetime(2026, 8, 11, 13, 20, tzinfo=UTC)
 
 
-def _raw(action_key: str, trigger: str, effect: str, index: int) -> dict:
+def _event(event_id, minute, action, effect, trigger, screen, *, source="client"):
     return {
-        "eventId": f"evt{index}",
-        "projectId": "course-app",
-        "subjectId": "learner_1",
-        "sessionId": "sess1",
-        "timestamp": (_BASE + timedelta(seconds=index)).isoformat(),
-        "actionKey": action_key,
-        "trigger": trigger,
+        "eventId": event_id,
+        "projectId": "learnloop",
+        "subjectId": "sub_42",
+        "sessionId": "sess_9",
+        "timestamp": (_BASE + timedelta(minutes=minute)).isoformat(),
+        "actionKey": action,
         "effect": effect,
+        "trigger": trigger,
+        "source": source,
+        "screen": screen,
+        "target": None,
         "status": "success",
-        "screen": "courses",
+        "duration": None,
     }
 
 
-def test_course_app_session_produces_the_expected_clean_action_flow():
-    raw_events = [
-        _raw("app_started", "lifecycle", "view", 0),
-        _raw("open_courses", "button", "route", 1),
-        _raw("courses_viewed", "automatic", "view", 2),
-        _raw("scroll_courses", "scroll", "view", 3),
-        _raw("open_course", "button", "route", 4),
-        _raw("sync_progress", "automatic", "update", 5),
-        _raw("start_lesson", "button", "route", 6),
-    ]
+_RAW_SESSION = [
+    _event("evt1", 0, "open_courses", "route", "button", "home"),
+    _event("evt2", 1, "course_list_shown", "view", "automatic", "courses"),
+    _event("evt3", 2, "scroll_list", "query", "scroll", "courses"),
+    _event("evt4", 3, "open_course", "route", "button", "courses"),
+    _event("evt5", 4, "background_sync", "none", "automatic", None, source="system"),
+    _event("evt6", 5, "start_lesson", "route", "button", "course_42"),
+]
 
-    observations = [build_observation(raw, _MAPPING) for raw in raw_events]
-    ordered, confidence = order_session(observations)
-    series = extract_series(ordered, confidence, default_engine_config().family)
+
+def test_seven_event_session_produces_a_three_action_clean_flow():
+    observations = [build_observation(raw, _MAPPING) for raw in _RAW_SESSION]
+    grouped = group_by_session(observations)
+    assert set(grouped) == {"sess_9"}
+
+    ordered, confidence = order_session(grouped["sess_9"])
+    series = extract_series(ordered, confidence)
 
     assert len(series) == 1
-    assert [step.token.action for step in series[0].normalized_steps] == [
-        "open_courses",
-        "open_course",
-        "start_lesson",
-    ]
-    # CONTEXT/IGNORE olarak sınıflanan adımlar action akışına girmez, ama audit için
-    # raw_observations'ta -- session'ın tam ham event sayısıyla -- korunmaya devam eder.
-    assert len(series[0].raw_observations) == len(raw_events)
+    assert [step.token.action for step in series[0].steps] == ["open_courses", "open_course", "start_lesson"]
+    # CONTEXT/IGNORE olaylar temiz akıştan düşer ama raw kanıt olarak korunur.
+    assert len(series[0].raw_observations) == len(_RAW_SESSION)
+
+
+def test_scroll_is_passive_and_never_enters_the_action_flow():
+    observations = [build_observation(raw, _MAPPING) for raw in _RAW_SESSION]
+    ordered, confidence = order_session(observations)
+    series = extract_series(ordered, confidence)
+
+    actions = [step.token.action for step in series[0].steps]
+    assert "scroll_list" not in actions
+
+
+def test_system_sourced_sync_event_is_ignored_not_treated_as_a_user_action():
+    observations = [build_observation(raw, _MAPPING) for raw in _RAW_SESSION]
+    ordered, confidence = order_session(observations)
+    series = extract_series(ordered, confidence)
+
+    actions = [step.token.action for step in series[0].steps]
+    assert "background_sync" not in actions

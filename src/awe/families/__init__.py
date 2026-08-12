@@ -1,20 +1,3 @@
-from awe.families.matching import (
-    accept_series,
-    compute_cohesion,
-    compute_relationships,
-    match_series,
-    seed_family,
-)
-from awe.families.similarity import order_preserving_coverage, weighted_similarity
-from awe.families.weighting import compute_discriminative_weights
+from awe.families.matching import compute_family_id, group_into_families
 
-__all__ = [
-    "match_series",
-    "accept_series",
-    "seed_family",
-    "compute_relationships",
-    "compute_cohesion",
-    "weighted_similarity",
-    "order_preserving_coverage",
-    "compute_discriminative_weights",
-]
+__all__ = ["compute_family_id", "group_into_families"]

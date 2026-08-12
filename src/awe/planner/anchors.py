@@ -1,87 +1,135 @@
-"""Family core sırasından NAVIGATE/PREFILL adayları için yapısal anchor seçimi.
+"""Anchor Resolver (bölüm 6.9): tekrarlanan davranışın gözlenen amaç/son işlem noktasını bulur.
+Shortcut değildir; yalnızca `HABIT_DETECTED` variant üzerinde çalışır.
 
-`destination` kavramı yoktur (bölüm 70); anchor yalnızca family core'undaki bir sembol
-referansıdır. Bir anchor, canonical `effect` politikası BLOCKED olan bir sembolde asla
-oluşturulmaz — bu, Risk katmanından önce Planner seviyesinde uygulanan yapısal bir güvenlik
-kısıtıdır (bölüm 80); Risk katmanı ayrıca kendi kanıt tabanlı kararını bağımsız olarak verir.
+Strength yorumu (belgenin üç kanıt kaynağından türetilmiştir, belge STRONG/MEDIUM ayrımını
+formülle vermez): pozisyon exact target taşıyorsa `STRONG`; yalnızca outcome-evidence effect
+taşıyorsa `MEDIUM`; yalnızca stable post-view kanıtından çözülmüşse `WEAK`.
 """
 
 from __future__ import annotations
 
-from collections import Counter
-
-from awe.config.engine_config import RiskConfig
-from awe.domain.enums import EffectPolicy, ObservationEffect
-from awe.domain.family import BehaviorFamily
+from awe.config.engine_config import ScreenEvidenceConfig
+from awe.domain.enums import (
+    AnchorStatus,
+    AnchorStrength,
+    ObservationEffect,
+    ObservationStatus,
+    ReasonCode,
+    ScreenEvidenceState,
+    TargetVariantKind,
+)
+from awe.domain.episode import EpisodeCandidate
 from awe.domain.plan import ShortcutAnchor
 from awe.domain.series import OSeries
+from awe.domain.target import TargetVariant
 from awe.domain.tokens import Symbol
+from awe.screen_evidence import build_screen_transition_evidence
 
-_NAVIGATE_EFFECTS = (ObservationEffect.ROUTE, ObservationEffect.OPEN_MODAL)
-_PREFILL_EFFECTS = (
-    ObservationEffect.INPUT,
-    ObservationEffect.SELECT,
-    ObservationEffect.PREPARE,
-    ObservationEffect.UPDATE,
-)
-_TERMINAL_EFFECTS = (ObservationEffect.SUBMIT, ObservationEffect.CONFIRM)
-
-
-def _effect_of(symbol: Symbol) -> ObservationEffect:
-    return ObservationEffect(symbol[1])
-
-
-def _is_anchorable(symbol: Symbol, effect_policy: dict[ObservationEffect, EffectPolicy]) -> bool:
-    effect = _effect_of(symbol)
-    if effect in _TERMINAL_EFFECTS:
-        return False
-    return effect_policy.get(effect, EffectPolicy.REVIEW) != EffectPolicy.BLOCKED
-
-
-def _representative_screen(core: list[Symbol], position: int, member_series: list[OSeries]) -> str | None:
-    symbol = core[position]
-    screens = [
-        step.screen
-        for series in member_series
-        for step in series.normalized_steps
-        if step.symbol == symbol and step.screen is not None
-    ]
-    if not screens:
-        return None
-    return Counter(screens).most_common(1)[0][0]
-
-
-def _build_anchor(core: list[Symbol], position: int, member_series: list[OSeries]) -> ShortcutAnchor:
-    return ShortcutAnchor(
-        symbol=core[position],
-        screen=_representative_screen(core, position, member_series),
-        core_position=position,
+_OUTCOME_EVIDENCE_EFFECTS = frozenset(
+    effect.value
+    for effect in (
+        ObservationEffect.SUBMIT,
+        ObservationEffect.CREATE,
+        ObservationEffect.DELETE,
+        ObservationEffect.CONFIRM,
+        ObservationEffect.UPDATE,
+        ObservationEffect.TOGGLE,
+        ObservationEffect.REQUEST,
+        ObservationEffect.DOWNLOAD,
+        ObservationEffect.SELECT,
+        ObservationEffect.FILTER,
+        ObservationEffect.SORT,
     )
+)
+ROUTE_OPEN_EFFECTS = frozenset(effect.value for effect in (ObservationEffect.ROUTE, ObservationEffect.OPEN))
 
 
-def select_navigate_anchors(
-    family: BehaviorFamily, member_series: list[OSeries], risk_config: RiskConfig
-) -> list[ShortcutAnchor]:
-    core = family.core_symbols_in_order
-    positions = [
-        i
-        for i, symbol in enumerate(core)
-        if _effect_of(symbol) in _NAVIGATE_EFFECTS and _is_anchorable(symbol, risk_config.effect_policy)
-    ]
-    if not positions:
-        return []
-    selected = {positions[0], positions[-1]}
-    return [_build_anchor(core, position, member_series) for position in sorted(selected)]
+def _occurrence_status_at(
+    position: int, variant: TargetVariant, candidates_by_id: dict[str, EpisodeCandidate]
+) -> AnchorStatus:
+    any_success = any(
+        candidates_by_id[occurrence_id].steps[position].status == ObservationStatus.SUCCESS
+        for occurrence_id in variant.occurrence_ids
+        if position < len(candidates_by_id[occurrence_id].steps)
+    )
+    return AnchorStatus.RESOLVED if any_success else AnchorStatus.ATTEMPT_ONLY
 
 
-def select_prefill_anchors(
-    family: BehaviorFamily, member_series: list[OSeries], risk_config: RiskConfig
-) -> list[ShortcutAnchor]:
-    core = family.core_symbols_in_order
-    anchorable = [i for i, symbol in enumerate(core) if _is_anchorable(symbol, risk_config.effect_policy)]
-    if not anchorable:
-        return []
+def resolve_anchor(
+    family_symbols: tuple[Symbol, ...],
+    variant: TargetVariant,
+    candidates_by_id: dict[str, EpisodeCandidate],
+    series_by_id: dict[str, OSeries],
+    screen_evidence_config: ScreenEvidenceConfig,
+) -> ShortcutAnchor:
+    last_position = max(len(family_symbols) - 1, 0)
+    fallback_symbol = family_symbols[-1] if family_symbols else ("", "", None, "")
 
-    positions = {i for i in anchorable if _effect_of(core[i]) in _PREFILL_EFFECTS}
-    positions.add(max(anchorable))
-    return [_build_anchor(core, position, member_series) for position in sorted(positions)]
+    if variant.kind == TargetVariantKind.UNKNOWN_TARGET:
+        return ShortcutAnchor(
+            symbol=fallback_symbol,
+            position=last_position,
+            strength=AnchorStrength.WEAK,
+            status=AnchorStatus.UNRESOLVED,
+            reason_codes=(ReasonCode.UNKNOWN_TARGET_BLOCKS_ANCHOR,),
+        )
+
+    target_positions = {i for i in range(len(family_symbols)) if variant.fingerprint[i] is not None}
+    outcome_positions = {i for i, symbol in enumerate(family_symbols) if symbol[1] in _OUTCOME_EVIDENCE_EFFECTS}
+    strong_positions = target_positions | outcome_positions
+
+    if strong_positions:
+        position = max(strong_positions)
+        strength = AnchorStrength.STRONG if position in target_positions else AnchorStrength.MEDIUM
+        trailing = family_symbols[position + 1 :]
+        trailing_is_route_open_only = bool(trailing) and all(
+            symbol[1] in ROUTE_OPEN_EFFECTS for symbol in trailing
+        )
+        if trailing_is_route_open_only:
+            return ShortcutAnchor(
+                symbol=family_symbols[position],
+                position=position,
+                strength=strength,
+                status=AnchorStatus.AMBIGUOUS,
+                reason_codes=(ReasonCode.AMBIGUOUS_ANCHOR,),
+            )
+        status = _occurrence_status_at(position, variant, candidates_by_id)
+        reasons = () if status == AnchorStatus.RESOLVED else (ReasonCode.ATTEMPT_ONLY,)
+        return ShortcutAnchor(
+            symbol=family_symbols[position],
+            position=position,
+            strength=strength,
+            status=status,
+            reason_codes=reasons,
+        )
+
+    all_route_open_only = bool(family_symbols) and all(
+        symbol[1] in ROUTE_OPEN_EFFECTS for symbol in family_symbols
+    )
+    if all_route_open_only:
+        evidence = build_screen_transition_evidence(
+            variant,
+            last_position,
+            family_symbols[last_position],
+            candidates_by_id,
+            series_by_id,
+            screen_evidence_config,
+        )
+        if evidence.state == ScreenEvidenceState.STABLE:
+            status = _occurrence_status_at(last_position, variant, candidates_by_id)
+            reasons = () if status == AnchorStatus.RESOLVED else (ReasonCode.ATTEMPT_ONLY,)
+            return ShortcutAnchor(
+                symbol=family_symbols[last_position],
+                position=last_position,
+                strength=AnchorStrength.WEAK,
+                status=status,
+                reason_codes=reasons,
+            )
+
+    return ShortcutAnchor(
+        symbol=fallback_symbol,
+        position=last_position,
+        strength=AnchorStrength.WEAK,
+        status=AnchorStatus.AMBIGUOUS,
+        reason_codes=(ReasonCode.AMBIGUOUS_ANCHOR,),
+    )

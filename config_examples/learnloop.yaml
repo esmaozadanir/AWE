@@ -1,7 +1,7 @@
 # LearnLoop — eğitim uygulaması örnek entegrasyonu.
 #
 # Bu müşterinin raw telemetry formatı ShopWave'den tamamen farklı alan adları kullanır
-# (bölüm 32'deki adapter portability gereksinimi). AWE Core değişmeden, yalnızca bu mapping
+# (bölüm 8'deki adapter portability gereksinimi). AWE Core değişmeden, yalnızca bu mapping
 # tanımıyla aynı canonical Observation modeline dönüşüm sağlanır.
 project_id: learnloop
 display_name: "LearnLoop — Eğitim Uygulaması"
@@ -16,8 +16,7 @@ mapping:
   timestamp_path: occurredAt
   action_key_path: actionName
   screen_path: screenName
-  widget_path: widgetId
-  app_version_path: clientVersion
+  duration_path: durationMs
 
   source:
     path: origin
@@ -26,9 +25,6 @@ mapping:
       backend: server
       lifecycle: system
     default: unknown
-  role:
-    path: interactionRole
-    default: action
   effect:
     path: structuralEffect
     default: unknown
@@ -46,24 +42,12 @@ mapping:
       ok: success
       error: fail
       aborted: cancel
-      partial: partial
     default: unknown
 
   target:
     ref_path: objectId
 
-  parameter_fields:
-    course_id: extra.courseId
-    module_id: extra.moduleId
-
-  breaks_episode_path: endsSession
-  breaks_episode_action_keys:
-    - sign_out
-
-  assume_timezone: "Europe/Istanbul"
-
 engine_overrides:
   habit:
-    min_occurrences: 3
-    min_distinct_sessions: 2
-    min_distinct_days: 3
+    min_distinct_sessions: 3
+    min_distinct_days: 2

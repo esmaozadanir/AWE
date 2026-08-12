@@ -1,7 +1,7 @@
-from awe.services.analysis import AnalysisSummary, FamilyAnalysisSummary, analyze_subject
+from awe.services.analysis import AnalysisSummary, VariantAnalysisSummary, analyze_subject
 from awe.services.ingestion import IngestOutcome, ingest_batch, ingest_event
 from awe.services.suggestions import (
-    PlanView,
+    IntentView,
     SuggestionView,
     dismiss_suggestion,
     list_subject_suggestions,
@@ -10,12 +10,12 @@ from awe.services.suggestions import (
 __all__ = [
     "analyze_subject",
     "AnalysisSummary",
-    "FamilyAnalysisSummary",
+    "VariantAnalysisSummary",
     "ingest_event",
     "ingest_batch",
     "IngestOutcome",
     "list_subject_suggestions",
     "dismiss_suggestion",
     "SuggestionView",
-    "PlanView",
+    "IntentView",
 ]

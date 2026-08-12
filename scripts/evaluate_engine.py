@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Büyük ölçekli sentetik değerlendirme (bölüm 126-129).
+"""Büyük ölçekli sentetik değerlendirme.
 
-100+ subject / 10.000+ event üzerinde motoru gerçek pipeline'dan (ingestion → analiz) geçirir,
-Habit kararlarını ground truth ile karşılaştırıp precision/recall/F1 hesaplar ve motor sağlık
+100+ subject üzerinde motoru gerçek pipeline'dan (ingestion → analiz) geçirir, Habit
+kararlarını ground truth ile karşılaştırıp precision/recall/F1 hesaplar ve motor sağlık
 metriklerini raporlar. Sonuç hem konsola hem de `--report` ile verilen JSON dosyasına yazılır.
 
 Kullanım:
@@ -25,32 +25,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sqlalchemy import func, select  # noqa: E402
 
 from awe.config import ProjectRegistry  # noqa: E402
-from awe.domain.enums import HabitDecision, PlanType, RiskDecisionType  # noqa: E402
+from awe.domain.enums import HabitDecision  # noqa: E402
 from awe.persistence import Base, create_database_engine, create_session_factory, session_scope  # noqa: E402
 from awe.persistence.models import (  # noqa: E402
-    FamilyRecord,
     HabitEvaluationRecord,
-    PlanCandidateRecord,
-    SeriesRecord,
+    ObservationRecord,
+    ShortcutIntentRecord,
     SuggestionRecord,
 )
-from awe.risk import ResolverContract  # noqa: E402
 from awe.services import analyze_subject, ingest_batch  # noqa: E402
 from awe.testing import PROFILE_NAMES, generate_multi_habit_subject, generate_subject  # noqa: E402
 
-_PROJECTS = (
-    "shopwave",
-    "socialpulse",
-    "financepilot",
-    "healthtrack",
-    "wanderly",
-    "streamboxx",
-)
+_PROJECTS = ("shopwave", "socialpulse", "financepilot", "healthtrack", "wanderly", "streamboxx")
 """Sentetik üretici, ShopWave'in canonical-benzeri raw event şeklini (eventId/projectId/...)
-üretir; bu 6 proje aynı şekli paylaşır (bölüm 121'in domain portability iddiası — aynı Core,
-farklı iş sözlükleriyle). LearnLoop ve TaskFlow kasıtlı olarak FARKLI bir ham telemetry şekli
-kullanır (bölüm 32'nin adapter portability gereksinimi) ve bu nedenle ayrı adanmış testlerle
-(`tests/integration/test_pipeline_end_to_end.py`) doğrulanır; jenerik üreticiye dahil edilmez."""
+üretir; bu 6 proje aynı şekli paylaşır (domain portability — aynı Core, farklı iş sözlükleriyle).
+LearnLoop ve TaskFlow kasıtlı olarak FARKLI bir ham telemetry şekli kullanır (adapter
+portability) ve jenerik üreticiye dahil edilmez."""
 _BASE_TIME = datetime(2026, 1, 1, 9, tzinfo=UTC)
 _ANALYSIS_NOW = _BASE_TIME + timedelta(days=200)
 
@@ -81,27 +71,31 @@ def _build_dataset(factory, subjects_per_profile: int, multi_habit_subjects: int
         project_id = next(project_cycle)
         project_config = registry.get(project_id)
         subject_id = f"multi_{index}"
-        generated = generate_multi_habit_subject(project_id, subject_id, seed, _BASE_TIME)
+        generated_multi = generate_multi_habit_subject(project_id, subject_id, seed, _BASE_TIME)
         seed += 1
         with session_scope(factory) as session:
-            outcomes = ingest_batch(session, project_config, project_id, generated.events, _BASE_TIME)
+            outcomes = ingest_batch(session, project_config, project_id, generated_multi.events, _BASE_TIME)
             assert all(o.accepted for o in outcomes)
-        total_events += len(generated.events)
-        multi_subjects.append((project_id, subject_id, len(generated.component_profiles)))
+        total_events += len(generated_multi.events)
+        multi_subjects.append((project_id, subject_id, len(generated_multi.component_profiles)))
 
     return single_subjects, multi_subjects, total_events
 
 
 def _analyze_all(factory, single_subjects, multi_subjects):
     registry = ProjectRegistry("config_examples")
-    resolver = ResolverContract.permissive()
 
     single_results = []
     for project_id, subject_id, expected in single_subjects:
         project_config = registry.get(project_id)
         with session_scope(factory) as session:
-            summary = analyze_subject(session, project_config, project_id, subject_id, resolver, _ANALYSIS_NOW)
-        actual = summary.families[0].habit_decision if summary.families else HabitDecision.PENDING_EVIDENCE
+            summary = analyze_subject(session, project_config, project_id, subject_id, _ANALYSIS_NOW)
+        decisions = [v.habit_decision for v in summary.variants]
+        actual = (
+            HabitDecision.HABIT_DETECTED
+            if HabitDecision.HABIT_DETECTED in decisions
+            else HabitDecision.INSUFFICIENT_EVIDENCE
+        )
         single_results.append(
             {
                 "project_id": project_id,
@@ -110,24 +104,24 @@ def _analyze_all(factory, single_subjects, multi_subjects):
                 "expected": expected.value,
                 "actual": actual.value,
                 "correct": actual == expected,
-                "family_count": len(summary.families),
+                "variant_count": len(summary.variants),
             }
         )
 
     multi_results = []
-    for project_id, subject_id, expected_family_count in multi_subjects:
+    for project_id, subject_id, expected_component_count in multi_subjects:
         project_config = registry.get(project_id)
         with session_scope(factory) as session:
-            summary = analyze_subject(session, project_config, project_id, subject_id, resolver, _ANALYSIS_NOW)
-        passing = sum(1 for f in summary.families if f.habit_decision == HabitDecision.PASS)
+            summary = analyze_subject(session, project_config, project_id, subject_id, _ANALYSIS_NOW)
+        detected = sum(1 for v in summary.variants if v.habit_decision == HabitDecision.HABIT_DETECTED)
         multi_results.append(
             {
                 "project_id": project_id,
                 "subject_id": subject_id,
-                "expected_family_count": expected_family_count,
-                "actual_family_count": len(summary.families),
-                "passing_family_count": passing,
-                "correct": passing == expected_family_count,
+                "expected_component_count": expected_component_count,
+                "actual_variant_count": len(summary.variants),
+                "detected_habit_count": detected,
+                "correct": detected == expected_component_count,
             }
         )
 
@@ -135,10 +129,11 @@ def _analyze_all(factory, single_subjects, multi_subjects):
 
 
 def _classification_metrics(single_results: list[dict]) -> dict:
-    tp = sum(1 for r in single_results if r["expected"] == "pass" and r["actual"] == "pass")
-    fn = sum(1 for r in single_results if r["expected"] == "pass" and r["actual"] != "pass")
-    fp = sum(1 for r in single_results if r["expected"] != "pass" and r["actual"] == "pass")
-    tn = sum(1 for r in single_results if r["expected"] != "pass" and r["actual"] != "pass")
+    positive = HabitDecision.HABIT_DETECTED.value
+    tp = sum(1 for r in single_results if r["expected"] == positive and r["actual"] == positive)
+    fn = sum(1 for r in single_results if r["expected"] == positive and r["actual"] != positive)
+    fp = sum(1 for r in single_results if r["expected"] != positive and r["actual"] == positive)
+    tn = sum(1 for r in single_results if r["expected"] != positive and r["actual"] != positive)
 
     precision = tp / (tp + fp) if (tp + fp) else None
     recall = tp / (tp + fn) if (tp + fn) else None
@@ -158,58 +153,41 @@ def _per_profile_breakdown(single_results: list[dict]) -> dict:
 
 def _engine_health_metrics(factory) -> dict:
     with session_scope(factory) as session:
+        observation_count = session.execute(select(func.count(ObservationRecord.id))).scalar_one()
         subject_count = session.execute(
-            select(func.count(func.distinct(FamilyRecord.subject_id)))
+            select(func.count(func.distinct(ObservationRecord.subject_id)))
         ).scalar_one()
-        family_count = session.execute(select(func.count(FamilyRecord.id))).scalar_one()
-        series_count = session.execute(select(func.count(SeriesRecord.id))).scalar_one()
-        ambiguous_series_count = session.execute(
-            select(func.count(SeriesRecord.id)).where(SeriesRecord.family_id.is_(None))
-        ).scalar_one()
-
-        families = session.execute(select(FamilyRecord)).scalars().all()
-        avg_variants = (
-            sum(len(f.representative_variants) for f in families) / len(families) if families else 0.0
-        )
-        avg_cohesion = sum(f.cohesion for f in families) / len(families) if families else 0.0
 
         habit_decisions = session.execute(select(HabitEvaluationRecord.decision)).scalars().all()
-        eligible_habit_count = sum(1 for d in habit_decisions if d == HabitDecision.PASS.value)
+        variant_count = len(habit_decisions)
+        detected_count = sum(1 for d in habit_decisions if d == HabitDecision.HABIT_DETECTED.value)
 
-        plan_rows = session.execute(select(PlanCandidateRecord)).scalars().all()
-        plans_per_habit = len(plan_rows) / eligible_habit_count if eligible_habit_count else 0.0
-        prefill_plans = [p for p in plan_rows if p.plan_type == PlanType.PREFILL.value]
-        downgraded_prefill = sum(
-            1 for p in prefill_plans if p.risk_decision == RiskDecisionType.DOWNGRADE_TO_NAVIGATE.value
-        )
-        prefill_downgrade_rate = downgraded_prefill / len(prefill_plans) if prefill_plans else 0.0
+        intent_rows = session.execute(select(ShortcutIntentRecord)).scalars().all()
+        intents_per_habit = len(intent_rows) / detected_count if detected_count else 0.0
 
         suggestions = session.execute(select(SuggestionRecord)).scalars().all()
-        eligible_suggestion_states = {"active", "eligible", "stale"}
-        eligible_suggestions = [s for s in suggestions if s.state in eligible_suggestion_states]
+        active_suggestions = [s for s in suggestions if s.state in {"active", "stale"}]
         duplicate_suppressed = sum(1 for s in suggestions if "duplicate_plan" in (s.reason_codes or []))
 
     return {
-        "subjects_with_families": subject_count,
-        "families_total": family_count,
-        "series_total": series_count,
-        "ambiguous_series_rate": (ambiguous_series_count / series_count) if series_count else 0.0,
-        "families_per_subject": (family_count / subject_count) if subject_count else 0.0,
-        "variants_per_family_avg": avg_variants,
-        "family_cohesion_avg": avg_cohesion,
-        "eligible_habits_total": eligible_habit_count,
-        "plans_per_habit_avg": plans_per_habit,
-        "prefill_downgrade_rate": prefill_downgrade_rate,
-        "eligible_suggestions_total": len(eligible_suggestions),
-        "eligible_suggestions_per_subject": (len(eligible_suggestions) / subject_count) if subject_count else 0.0,
+        "subjects_total": subject_count,
+        "observations_total": observation_count,
+        "target_variants_total": variant_count,
+        "variants_per_subject": (variant_count / subject_count) if subject_count else 0.0,
+        "habit_detected_total": detected_count,
+        "shortcut_intents_evaluated_total": len(intent_rows),
+        "shortcut_intents_per_detected_habit": intents_per_habit,
+        "active_suggestions_total": len(active_suggestions),
+        "active_suggestions_per_subject": (len(active_suggestions) / subject_count) if subject_count else 0.0,
         "duplicate_suppressed_total": duplicate_suppressed,
     }
 
 
 def _failure_bucket(result: dict) -> str:
-    if result["expected"] == "pass" and result["actual"] != "pass":
+    positive = HabitDecision.HABIT_DETECTED.value
+    if result["expected"] == positive and result["actual"] != positive:
         return "HABIT_FALSE_NEGATIVE"
-    if result["expected"] != "pass" and result["actual"] == "pass":
+    if result["expected"] != positive and result["actual"] == positive:
         return "HABIT_FALSE_POSITIVE"
     return "NONE"
 
@@ -265,7 +243,7 @@ def _print_report(report: dict) -> None:
     print(f"subjects: {dataset['total_subjects']}  events: {dataset['total_events']}")
     print(f"ingestion: {dataset['ingestion_seconds']}s  analysis: {dataset['analysis_seconds']}s")
 
-    print("\n=== Habit Classification (positive class = PASS) ===")
+    print("\n=== Habit Classification (positive class = HABIT_DETECTED) ===")
     print(f"TP={metrics['tp']} FP={metrics['fp']} FN={metrics['fn']} TN={metrics['tn']}")
     print(f"precision={metrics['precision']}  recall={metrics['recall']}  f1={metrics['f1']}")
 
@@ -275,7 +253,7 @@ def _print_report(report: dict) -> None:
 
     print("\n=== Multi-habit subjects ===")
     multi_correct = sum(1 for r in report["multi_habit_results"] if r["correct"])
-    print(f"  {multi_correct}/{len(report['multi_habit_results'])} subjects had the exact expected family count")
+    print(f"  {multi_correct}/{len(report['multi_habit_results'])} subjects had the exact expected habit count")
 
     print("\n=== Failure buckets ===")
     if not report["failure_buckets"]:

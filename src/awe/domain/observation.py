@@ -1,7 +1,10 @@
-"""Canonical Observation modeli (spesifikasyon bölüm 30).
+"""Canonical Observation modeli (bkz. AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md bölüm 4).
 
 Observation, müşteriye özel raw event'in Adapter tarafından üretilen, uygulamadan bağımsız
 karşılığıdır. Aşağı katmanların hiçbiri bir daha müşterinin ham telemetry formatını görmez.
+`role`, `widget`, `parameters`, `breaksEpisode`, `appVersion` kasıtlı olarak yoktur: bu alanlar
+eski tasarımdan kalmıştı ve yeni sözleşme onları tanımıyor (bkz. bölüm 4, 9.10 dışı bırakılan
+"online state" notları hariç).
 """
 
 from __future__ import annotations
@@ -11,7 +14,6 @@ from datetime import datetime
 
 from awe.domain.enums import (
     ObservationEffect,
-    ObservationRole,
     ObservationSource,
     ObservationStatus,
     ObservationTrigger,
@@ -20,13 +22,19 @@ from awe.domain.enums import (
 
 @dataclass(frozen=True, slots=True)
 class ObservationQuality:
-    """Adapter'ın canonicalization sırasında ürettiği veri kalitesi kanıtı."""
+    """Adapter'ın canonicalization sırasında ürettiği veri kalitesi kanıtı (bölüm 6.1).
+
+    `session_id` burada yer almaz: zorunlu bir alandır ve eksikse/boşsa event reddedilir
+    (bölüm 6.1 "Zorunlu alan eksikse event reject edilir") — sentetik session_id üretme veya
+    kısmi kabul yoktur."""
 
     has_screen: bool
-    has_widget: bool
-    has_session_id: bool
-    is_synthetic_session: bool = False
-    mapping_warnings: tuple[str, ...] = ()
+    missing_target_field: bool = False
+    """Raw payload'da `target` anahtarı hiç yoktu (bölüm 6.1: "target anahtarı yoksa
+    MISSING_TARGET_FIELD üretilir"). `target=None` ile karıştırılmamalı: `target=None` "açıkça
+    hedef yok" anlamına gelirken bu flag "hedef verisi bilinmiyor" anlamına gelir (bölüm 3, kural 6)."""
+    invalid_duration: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,32 +45,21 @@ class Observation:
     session_id: str
     timestamp: datetime
 
-    source: ObservationSource
-
     action: str
-    role: ObservationRole
-    effect: ObservationEffect
+    source: ObservationSource
     trigger: ObservationTrigger
+    effect: ObservationEffect
+    status: ObservationStatus
 
     screen: str | None
-    widget: str | None
-
     target: str | None
-    """Hedef referansı (ör. tıklanan öğenin id'si). `None` iki durumu birden temsil eder:
-    mapping target'ı hiç izlemiyor ya da bu event için raw değer boş — ikisi de aşağı
-    katmanlar için "bilinen, kararlı bir hedef yok" anlamına gelir. Boş string (`""`),
-    mapping target'ı izliyor ama bu event'in AÇIKÇA hedefi olmadığını (ör. "logout")
-    `None`'dan ayırt etmek için kullanılır (bkz. `awe.planner.state_reconstruction`)."""
-    parameters: dict[str, str] = field(default_factory=dict)
+    """Hedef referansı. `None` = raw event'te `target` alanı açıkça `null` gönderildi ("açıkça
+    hedef yok", bölüm 3 kural 6). Raw payload'da `target` anahtarı hiç yoksa değer yine `None`
+    olur ama `quality.missing_target_field=True` ile işaretlenir ("hedef verisi bilinmiyor") —
+    aşağı katmanlar bu ayrımı `quality` üzerinden okur, `target` tek başına bunu taşıyamaz."""
+    duration_ms: int | None
+    """Yalnızca audit amaçlı (bölüm 6.14, 9.9) — hiçbir karar bu alana bakmaz."""
 
-    status: ObservationStatus = ObservationStatus.UNKNOWN
-    breaks_episode: bool = False
-
-    app_version: str | None = None
     mapping_version: str = "unversioned"
 
-    quality: ObservationQuality = field(
-        default_factory=lambda: ObservationQuality(
-            has_screen=False, has_widget=False, has_session_id=False
-        )
-    )
+    quality: ObservationQuality = field(default_factory=lambda: ObservationQuality(has_screen=False))

@@ -1,4 +1,4 @@
-"""Event ingestion ve subject analiz endpoint'leri (bölüm 97)."""
+"""Event ingestion ve subject analiz endpoint'leri."""
 
 from __future__ import annotations
 
@@ -10,13 +10,11 @@ from sqlalchemy.orm import Session
 from awe.api.dependencies import get_db_session, get_project_config
 from awe.api.schemas import (
     AnalysisResponse,
-    AnalyzeRequest,
     BatchIngestResponse,
     EventIngestResponse,
-    FamilyAnalysisResponse,
+    VariantAnalysisResponse,
 )
 from awe.config import ProjectConfig
-from awe.risk import ResolverContract
 from awe.services import IngestOutcome, analyze_subject, ingest_batch, ingest_event
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["events"])
@@ -24,7 +22,11 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["events"])
 
 def _ingest_response(outcome: IngestOutcome) -> EventIngestResponse:
     return EventIngestResponse(
-        accepted=outcome.accepted, duplicate=outcome.duplicate, event_id=outcome.event_id, error=outcome.error
+        accepted=outcome.accepted,
+        duplicate=outcome.duplicate,
+        conflict=outcome.conflict,
+        event_id=outcome.event_id,
+        error=outcome.error,
     )
 
 
@@ -55,38 +57,24 @@ def post_event_batch(
     )
 
 
-def _resolver_from_request(request: AnalyzeRequest) -> ResolverContract:
-    capabilities = request.resolver
-    accepted = frozenset(capabilities.accepted_bindings) if capabilities.accepted_bindings is not None else None
-    return ResolverContract(
-        supports_navigate=capabilities.supports_navigate,
-        supports_prefill=capabilities.supports_prefill,
-        accepted_bindings=accepted,
-        requires_review=capabilities.requires_review,
-        supports_runtime_validation=capabilities.supports_runtime_validation,
-    )
-
-
 @router.post("/subjects/{subject_id}/analyze", response_model=AnalysisResponse)
 def post_analyze_subject(
     project_id: str,
     subject_id: str,
-    request: AnalyzeRequest = AnalyzeRequest(),
     project_config: ProjectConfig = Depends(get_project_config),
     session: Session = Depends(get_db_session),
 ) -> AnalysisResponse:
-    resolver = _resolver_from_request(request)
-    summary = analyze_subject(session, project_config, project_id, subject_id, resolver, datetime.now(UTC))
+    summary = analyze_subject(session, project_config, project_id, subject_id, datetime.now(UTC))
     return AnalysisResponse(
         project_id=summary.project_id,
         subject_id=summary.subject_id,
-        new_series_count=summary.new_series_count,
-        families=[
-            FamilyAnalysisResponse(
-                family_key=f.family_key,
-                habit_decision=f.habit_decision.value,
-                suggestion_state=f.suggestion_state.value if f.suggestion_state else None,
+        series_count=summary.series_count,
+        variants=[
+            VariantAnalysisResponse(
+                variant_key=v.variant_key,
+                habit_decision=v.habit_decision.value,
+                suggestion_state=v.suggestion_state.value if v.suggestion_state else None,
             )
-            for f in summary.families
+            for v in summary.variants
         ],
     )

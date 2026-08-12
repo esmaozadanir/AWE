@@ -52,19 +52,12 @@ def _build_mapping(data: dict[str, Any]) -> AdapterMapping:
         action_key_path=data["action_key_path"],
         action_key_value_map=data.get("action_key_value_map", {}),
         screen_path=data.get("screen_path"),
-        widget_path=data.get("widget_path"),
-        app_version_path=data.get("app_version_path"),
-        duration_ms_path=data.get("duration_ms_path"),
+        duration_path=data.get("duration_path"),
         source=_build_field_rule(data.get("source")),
-        role=_build_field_rule(data.get("role")),
         effect=_build_field_rule(data.get("effect")),
         trigger=_build_field_rule(data.get("trigger")),
         status=_build_field_rule(data.get("status")),
         target=TargetRule(ref_path=target_data.get("ref_path")),
-        parameter_fields=data.get("parameter_fields", {}),
-        breaks_episode_path=data.get("breaks_episode_path"),
-        breaks_episode_action_keys=frozenset(data.get("breaks_episode_action_keys", [])),
-        assume_timezone=data.get("assume_timezone", "UTC"),
     )
 
 
@@ -73,7 +66,7 @@ def _build_engine_overrides(data: dict[str, Any] | None, timezone: str) -> Engin
     if not data:
         return dataclasses.replace(base, timezone=timezone)
 
-    section_names = ("family", "habit", "planner", "risk", "benefit", "lifecycle")
+    section_names = ("episode", "habit", "screen_evidence", "risk", "lifecycle")
     updated_sections: dict[str, Any] = {}
     for section_name in section_names:
         overrides = data.get(section_name)
@@ -110,8 +103,7 @@ class ProjectRegistry:
         config = load_project_config(candidate)
         if config.project_id != project_id:
             raise ValueError(
-                f"config file '{candidate}' declares project_id '{config.project_id}', "
-                f"expected '{project_id}'"
+                f"config file '{candidate}' declares project_id '{config.project_id}', expected '{project_id}'"
             )
         self._cache[project_id] = config
         return config

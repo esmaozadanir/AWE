@@ -1,43 +1,42 @@
-"""Risk katmanının kanıt ve karar modelleri (bölüm 79-83)."""
+"""Risk Evaluator'ın kanıt ve karar modelleri (bölüm 6.13).
+
+Tek bir skor değil, açıklanabilir bir vektördür. Selector yalnızca `RiskDecision` kapısına
+bakar (`ALLOW`/`BLOCK`); vektörün diğer alanları açıklanabilirlik ve loglama içindir.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from awe.domain.enums import EffectPolicy, ReasonCode, RiskDecisionType
+from awe.domain.enums import EffectPolicy, ExecutionExposure, PlanMode, ReasonCode, RiskDecision
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilityEvidence:
+    completion_rate: float
+    failure_rate: float
+    cancel_rate: float
+    sample_size: int
 
 
 @dataclass(frozen=True, slots=True)
 class RiskEvidence:
-    effect_policy: EffectPolicy
-    anchor_coverage: float
-    state_confidence: float
-
-    target_dominance: float | None
-    target_coverage: float | None
-    binding_dominance: float | None
-    binding_coverage: float | None
-
-    sample_size: int
-    recent_drift: bool
-
-    completion_rate: float
-    failure_rate: float
-    cancel_rate: float
-
-    resolver_supported: bool
-    requires_review: bool
-    runtime_validation_passed: bool | None
-
-    data_quality_score: float
-    family_ambiguous: bool
-    family_cohesion: float
+    policy: EffectPolicy
+    """Anchor'ın effect'i için proje konfigürasyonunun tanımladığı güvenlik sınıfı."""
+    plan_surface: PlanMode
+    execution_exposure: ExecutionExposure
+    interaction_guard_intact: bool
+    """`automaticAction=NONE` ve `finalActionOwner=USER` koşulları sağlanıyor mu."""
+    observed_goal_sensitivity: EffectPolicy
+    """Scope içindeki adımların en hassas (en kısıtlayıcı) effect policy'si — yalnızca
+    Anchor'ın kendi effect'i değil, oraya varan tüm gözlenen akış dikkate alınır."""
+    reliability: ReliabilityEvidence
+    data_quality_ok: bool
 
 
 @dataclass(frozen=True, slots=True)
-class RiskDecisionResult:
-    plan_id: str
-    decision: RiskDecisionType
+class RiskAssessment:
+    intent_id: str
+    decision: RiskDecision
     evidence: RiskEvidence
-    reason_codes: tuple[ReasonCode, ...]
-    reduced_bindings: tuple[str, ...] = ()
+    reason_codes: tuple[ReasonCode, ...] = ()

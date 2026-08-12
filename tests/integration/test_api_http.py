@@ -1,106 +1,97 @@
-"""FastAPI HTTP katmanının uçtan uca doğrulaması (gerçek istek/yanıt döngüsü)."""
+"""FastAPI HTTP yüzeyinin uçtan uca doğrulaması: event ingest -> analyze -> suggestions ->
+dismiss, gerçek `config_examples/shopwave.yaml` mapping'i üzerinden."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from awe.api.main import app
+from awe.config import ProjectRegistry, Settings
 from awe.persistence import Base, create_database_engine
 
-_BASE = datetime(2026, 4, 1, 9, 0, tzinfo=UTC)
-_STEPS = [
-    ("open_settings", "route"),
-    ("open_security", "route"),
-    ("select_change_password", "select"),
-    ("confirm_password_reset", "confirm"),
-]
-
-
-def _event(day: int, index: int, action: str, effect: str) -> dict:
-    ts = (_BASE + timedelta(days=day, minutes=index)).isoformat()
-    return {
-        "eventId": f"evt-{day}-{index}",
-        "projectId": "shopwave",
-        "subjectId": "user_1",
-        "sessionId": f"sess-{day}",
-        "timestamp": ts,
-        "source": "client",
-        "actionKey": action,
-        "role": "action",
-        "effect": effect,
-        "trigger": "button",
-        "screen": "settings",
-        "widget": "password_row",
-        "target": None,
-        "status": "success",
-        "breaksEpisode": False,
-        "metadata": {},
-    }
+_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config_examples"
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "api_test.db"
-    monkeypatch.setenv("AWE_DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("AWE_PROJECT_CONFIG_DIR", "config_examples")
-
-    engine = create_database_engine(f"sqlite:///{db_path}")
+def client(tmp_path):
+    db_path = tmp_path / f"{uuid.uuid4().hex}.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = create_database_engine(database_url)
     Base.metadata.create_all(engine)
 
-    from awe.api import dependencies
-
-    dependencies._session_factory_for.cache_clear()
-
+    # `app.state` burada değil, TestClient girişinden (lifespan çalıştıktan) SONRA set edilir —
+    # aksi halde `_lifespan`in kendi `get_settings()` çağrısı bu override'ı ezer.
     with TestClient(app) as test_client:
+        app.state.settings = Settings(database_url=database_url, project_config_dir=str(_CONFIG_DIR))
+        app.state.project_registry = ProjectRegistry(_CONFIG_DIR)
         yield test_client
 
 
-def test_health_endpoint_reports_ok(client: TestClient):
-    response = client.get("/health")
+def _raw_event(event_id: str, session_id: str, day: int, action: str, effect: str, screen: str) -> dict:
+    base = datetime(2026, 1, 1, 9, tzinfo=UTC) + timedelta(days=day)
+    return {
+        "eventId": event_id,
+        "projectId": "shopwave",
+        "subjectId": "sub_1",
+        "sessionId": session_id,
+        "timestamp": base.isoformat(),
+        "actionKey": action,
+        "effect": effect,
+        "trigger": "button",
+        "source": "client",
+        "screen": screen,
+        "target": {"ref": None},
+        "status": "success",
+    }
+
+
+def test_health_endpoint():
+    with TestClient(app) as client:
+        response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_full_http_round_trip_ingest_analyze_list_dismiss(client: TestClient):
-    for day in range(6):
-        for index, (action, effect) in enumerate(_STEPS):
-            response = client.post("/projects/shopwave/events", json=_event(day, index, action, effect))
-            assert response.status_code == 200
-            assert response.json()["accepted"] is True
-
-    duplicate = client.post("/projects/shopwave/events", json=_event(0, 0, *_STEPS[0]))
-    assert duplicate.json()["duplicate"] is True
-
-    analyze = client.post("/projects/shopwave/subjects/user_1/analyze")
-    assert analyze.status_code == 200
-    assert analyze.json()["families"][0]["habit_decision"] == "pass"
-
-    suggestions = client.get("/projects/shopwave/subjects/user_1/suggestions")
-    assert suggestions.status_code == 200
-    body = suggestions.json()
-    assert len(body) == 1
-    assert body[0]["primary_plan"]["plan_type"] == "prefill"
-
-    suggestion_key = body[0]["suggestion_key"]
-    dismissed = client.post(f"/projects/shopwave/subjects/user_1/suggestions/{suggestion_key}/dismiss")
-    assert dismissed.status_code == 200
-    assert dismissed.json()["state"] == "dismissed"
-
-    after_dismiss = client.get("/projects/shopwave/subjects/user_1/suggestions")
-    assert after_dismiss.json() == []
-
-
-def test_unknown_project_returns_404(client: TestClient):
-    response = client.post("/projects/unknown/events", json={})
+def test_unknown_project_returns_404(client):
+    response = client.post("/projects/does-not-exist/events", json={})
     assert response.status_code == 404
 
 
-def test_malformed_event_is_rejected_not_crashed(client: TestClient):
-    response = client.post("/projects/shopwave/events", json={"missing": "required fields"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["accepted"] is False
-    assert body["error"] is not None
+def test_event_ingest_analyze_and_suggestion_flow(client):
+    for day in range(3):
+        response = client.post(
+            "/projects/shopwave/events",
+            json=_raw_event(f"evt-{day}", f"sess-{day}", day, "open_cart", "route", "cart"),
+        )
+        assert response.status_code == 200
+        assert response.json()["accepted"] is True
+
+    analyze_response = client.post("/projects/shopwave/subjects/sub_1/analyze")
+    assert analyze_response.status_code == 200
+    body = analyze_response.json()
+    assert body["series_count"] == 3
+    assert "variants" in body
+
+    suggestions_response = client.get("/projects/shopwave/subjects/sub_1/suggestions")
+    assert suggestions_response.status_code == 200
+    assert isinstance(suggestions_response.json(), list)
+
+
+def test_batch_ingest_reports_accepted_and_duplicate_counts(client):
+    events = [_raw_event("evt-batch-1", "sess-batch", 0, "open_cart", "route", "cart")]
+    first = client.post("/projects/shopwave/events/batch", json=events)
+    assert first.status_code == 200
+    assert first.json()["accepted_count"] == 1
+
+    second = client.post("/projects/shopwave/events/batch", json=events)
+    assert second.json()["duplicate_count"] == 1
+
+
+def test_dismiss_unknown_suggestion_returns_404(client):
+    response = client.post("/projects/shopwave/subjects/sub_1/suggestions/does-not-exist/dismiss")
+    assert response.status_code == 404

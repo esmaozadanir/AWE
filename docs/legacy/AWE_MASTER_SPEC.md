@@ -955,29 +955,21 @@ Observation(
     subject_id=...,
     session_id=...,
     timestamp=...,
-
     source=...,
-
     action_key=...,
     role=...,
     effect=...,
     trigger=...,
-
     screen=...,
     widget=...,
-
     target=...,
     target_state=...,
-
     parameters=...,
-
     status=...,
     breaks_episode=...,
-
     app_version=...,
     mapping_version=...,
-
-    quality=...
+    quality=...,
 )
 ```
 

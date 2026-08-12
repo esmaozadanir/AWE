@@ -1,4 +1,4 @@
-"""Subject'e ait suggestion'ların dışa sunulacak görünümü ve dismiss akışı (bölüm 97)."""
+"""Subject'e ait suggestion'ların dışa sunulacak görünümü ve dismiss akışı."""
 
 from __future__ import annotations
 
@@ -8,29 +8,28 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from awe.config.engine_config import LifecycleConfig
+from awe.domain.benefit import BenefitEvidence
 from awe.lifecycle import dismiss as dismiss_lifecycle
-from awe.persistence.models import PlanCandidateRecord, SuggestionRecord
+from awe.persistence.models import ShortcutIntentRecord, SuggestionRecord
 from awe.persistence.repository import (
-    fetch_plan_candidate,
+    fetch_shortcut_intent_by_key,
     fetch_suggestion_by_key,
     list_suggestions,
 )
 
-_VISIBLE_STATES = {"active", "stale", "eligible"}
+_VISIBLE_STATES = {"active", "stale"}
 
 
 @dataclass(frozen=True, slots=True)
-class PlanView:
-    plan_id: str
-    plan_type: str
-    """Kullanıcıya sunulacak fiili tip: Risk tarafından DOWNGRADE_TO_NAVIGATE kararı verilmiş
-    bir PREFILL adayı burada 'navigate' olarak görünür ve binding'leri taşınmaz."""
-    anchor_symbol: list[str]
-    anchor_screen: str | None
-    bindings: list[dict]
-    target_binding: dict | None
+class IntentView:
+    intent_key: str
+    mode: str | None
+    destination_screen: str | None
+    target: str | None
+    requires_user_confirmation: bool
     risk_decision: str
-    benefit_median_saved_actions: float
+    benefit_saved_actions: int
+    benefit_level: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,40 +39,41 @@ class SuggestionView:
     subject_id: str
     state: str
     reason_codes: list[str]
-    primary_plan: PlanView
-    fallback_plans: list[PlanView]
+    intent: IntentView
     created_at: datetime
     updated_at: datetime
     dismissed_at: datetime | None
 
 
-def _to_plan_view(record: PlanCandidateRecord) -> PlanView:
-    effective_type = "navigate" if record.risk_decision == "downgrade_to_navigate" else record.plan_type
-    bindings = record.bindings if effective_type == "prefill" else []
-    return PlanView(
-        plan_id=record.plan_key,
-        plan_type=effective_type,
-        anchor_symbol=record.anchor["symbol"],
-        anchor_screen=record.anchor["screen"],
-        bindings=bindings,
-        target_binding=record.target_binding,
+def _to_intent_view(record: ShortcutIntentRecord) -> IntentView:
+    benefit = BenefitEvidence(
+        intent_id=record.intent_key,
+        observed_actions=record.benefit_observed_actions,
+        planned_actions=record.benefit_planned_actions,
+    )
+    return IntentView(
+        intent_key=record.intent_key,
+        mode=record.mode,
+        destination_screen=record.destination_screen,
+        target=record.target,
+        requires_user_confirmation=record.requires_user_confirmation,
         risk_decision=record.risk_decision,
-        benefit_median_saved_actions=record.benefit_median,
+        benefit_saved_actions=benefit.saved_actions,
+        benefit_level=benefit.level.value,
     )
 
 
-def _to_suggestion_view(session: Session, record: SuggestionRecord) -> SuggestionView:
-    primary = fetch_plan_candidate(session, record.primary_plan_id)
-    assert primary is not None
-    fallback_records = [fetch_plan_candidate(session, pid) for pid in record.fallback_plan_ids]
+def _to_suggestion_view(session: Session, record: SuggestionRecord) -> SuggestionView | None:
+    intent_record = fetch_shortcut_intent_by_key(session, record.primary_intent_key)
+    if intent_record is None:
+        return None
     return SuggestionView(
         suggestion_key=record.suggestion_key,
         project_id=record.project_id,
         subject_id=record.subject_id,
         state=record.state,
         reason_codes=record.reason_codes,
-        primary_plan=_to_plan_view(primary),
-        fallback_plans=[_to_plan_view(p) for p in fallback_records if p is not None],
+        intent=_to_intent_view(intent_record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         dismissed_at=record.dismissed_at,
@@ -82,7 +82,8 @@ def _to_suggestion_view(session: Session, record: SuggestionRecord) -> Suggestio
 
 def list_subject_suggestions(session: Session, project_id: str, subject_id: str) -> list[SuggestionView]:
     records = list_suggestions(session, project_id, subject_id, states=_VISIBLE_STATES)
-    return [_to_suggestion_view(session, record) for record in records]
+    views = [_to_suggestion_view(session, record) for record in records]
+    return [view for view in views if view is not None]
 
 
 def dismiss_suggestion(

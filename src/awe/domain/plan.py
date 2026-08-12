@@ -1,47 +1,68 @@
-"""Shortcut Planner çıktı modelleri: ShortcutAnchor, FieldBinding, PlanCandidate.
+"""Anchor Resolver, Scope Projector, Destination Resolver ve Shortcut Intent Builder
+çıktı modelleri (bölüm 6.9-6.12).
 
-`destination` kavramı yoktur (bölüm 3.5, 70). Anchor bir index değil, family core sırası
-içindeki yapısal bir sembol referansıdır (bölüm 71); her occurrence'ta kendi normalize
-dizisi içinde sembol eşleştirmesiyle çözülür.
+`FieldBinding`/çoklu-parametre kavramı kasıtlı olarak yoktur: yeni sözleşmede tek bir
+skaler `target` alanı vardır, "workspace_1 + report_9" gibi compound identity taşınamaz
+(bölüm 6.12) — bu durumda Intent `UNSUPPORTED` olur.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from awe.domain.enums import FieldState, PlanType
+from awe.domain.enums import (
+    AnchorStatus,
+    AnchorStrength,
+    AutomaticAction,
+    FinalActionOwner,
+    IntentState,
+    PlanMode,
+    ReasonCode,
+)
 from awe.domain.tokens import Symbol
 
 
 @dataclass(frozen=True, slots=True)
 class ShortcutAnchor:
     symbol: Symbol
+    position: int
+    """TargetVariant'ın family sembol dizisi içindeki index — yalnızca açıklanabilirlik amaçlı."""
+    strength: AnchorStrength
+    status: AnchorStatus
+    reason_codes: tuple[ReasonCode, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Scope:
+    variant_id: str
+    included: tuple[Symbol, ...]
+    excluded_trailing: tuple[Symbol, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.included) == 0
+
+
+@dataclass(frozen=True, slots=True)
+class Destination:
     screen: str | None
-    core_position: int
-    """Family core sırasındaki konum — yalnızca açıklanabilirlik/loglama amaçlıdır, occurrence
-    çözümlemesi bu index'e değil `symbol` eşleşmesine dayanır."""
+    resolved: bool
+    reason_codes: tuple[ReasonCode, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class FieldBinding:
-    """Anchor öncesi state'te gözlenen bir alanın (target ya da parametre) kararlılığı."""
-
-    field_name: str
-    state: FieldState
-    dominant_value: str | None
-    dominance: float
-    coverage: float
-    sample_size: int
-    recent_dominance: float | None
-    """Son-K pencere içindeki dominance — concept drift kanıtı (bölüm 77). Yetersiz veri varsa None."""
-
-
-@dataclass(frozen=True, slots=True)
-class PlanCandidate:
-    plan_id: str
-    family_id: str
-    plan_type: PlanType
+class ShortcutIntent:
+    intent_id: str
+    variant_id: str
     anchor: ShortcutAnchor
-    bindings: tuple[FieldBinding, ...]
-    target_binding: FieldBinding | None
+
+    state: IntentState
+    mode: PlanMode | None
+    destination_screen: str | None
+    target: str | None
+    requires_user_confirmation: bool
+    automatic_action: AutomaticAction
+    final_action_owner: FinalActionOwner
+
     supporting_occurrences: int
+    reason_codes: tuple[ReasonCode, ...] = ()

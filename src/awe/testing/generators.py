@@ -1,12 +1,16 @@
-"""Deterministik sentetik event log üretici (bölüm 125).
+"""Deterministik sentetik event log üretici.
 
-Her profil, gerçek bir kullanıcı davranış deseni için (günlük, haftalık, burst, gürültülü,
-vb.) ground-truth bir Habit beklentisiyle birlikte ham event üretir. Üretilen event'ler,
-`config_examples/` altındaki proje konfigürasyonlarının paylaştığı canonical-benzeri mapping
-şekliyle (eventId/projectId/subjectId/... alan adları) uyumludur; bu yüzden aynı üretici tüm
-domain projelerinde kullanılabilir.
+Her profil, gerçek bir kullanıcı davranış deseni için (günlük, haftalık, burst, gürültülü, vb.)
+ground-truth bir Habit beklentisiyle birlikte, yeni ham event sözleşmesiyle (bölüm 4:
+eventId/projectId/subjectId/sessionId/timestamp/actionKey/effect/trigger/source/screen/target/
+status/duration) uyumlu ham event üretir.
 
 Bu modül yalnızca test/evaluation amaçlıdır; üretim koduna (adapter, engine) bağımlılığı yoktur.
+
+Eski tasarımdan kalan iki profil kasıtlı olarak kaldırılmıştır: `widget_rename` (artık `widget`
+alanı yok — `screen` sembolün parçası olduğu için "kimlikten hariç tutulan alan" kavramının
+analogu kalmadı) ve `parameter_drift` (FieldBinding recent-drift kavramı yeni tasarımda yok;
+`target_variable` zaten aynı temel senaryoyu — hedefin değişkenliğini — kapsıyor).
 """
 
 from __future__ import annotations
@@ -44,13 +48,10 @@ def _raw_event(
     action_key: str,
     effect: str,
     *,
-    role: str = "action",
     trigger: str = "button",
     screen: str = "app",
-    widget: str | None = None,
-    target: dict | None = None,
+    target: str | None = None,
     status: str = "success",
-    breaks_episode: bool = False,
 ) -> dict:
     return {
         "eventId": event_id,
@@ -60,15 +61,12 @@ def _raw_event(
         "timestamp": timestamp.isoformat(),
         "source": "client",
         "actionKey": action_key,
-        "role": role,
         "effect": effect,
         "trigger": trigger,
         "screen": screen,
-        "widget": widget,
         "target": target,
         "status": status,
-        "breaksEpisode": breaks_episode,
-        "metadata": {},
+        "duration": None,
     }
 
 
@@ -77,10 +75,8 @@ class _OccurrenceSpec:
     day: int
     minute_offset: int
     session_index: int
-    widget_suffix: str = "v1"
     target_ref: str | None = "item_1"
     add_noise: bool = False
-    add_detour: bool = False
     add_retry: bool = False
     final_status: str = "success"
     session_prefix: str = ""
@@ -106,32 +102,27 @@ def _emit_occurrence(
         nonlocal step
         event_id = f"evt-{subject_id}-{occurrence_index}-{step}"
         ts = base_time + timedelta(days=spec.day, minutes=spec.minute_offset + step)
-        events.append(
-            _raw_event(project_id, subject_id, session_id, event_id, ts, action_key, effect, **kwargs)
-        )
+        events.append(_raw_event(project_id, subject_id, session_id, event_id, ts, action_key, effect, **kwargs))
         step += 1
 
     if spec.add_noise:
-        # Gerçekçi bir uygulama-yaşam-döngüsü sinyali (ör. app foreground/background) —
-        # canonical sınıflandırmada (bkz. `awe.adapter.classification`) trigger=lifecycle +
-        # effect=update hiçbir gruba girmediği için IGNORE sayılır; bu yüzden temiz action
-        # akışına hiç girmez ve Family kimliğini etkilemez.
-        emit("app_foreground", "update", role="noise", trigger="lifecycle")
+        # effect="none" bölüm 6.2'de koşulsuz IGNORE üretir; temiz action akışına hiç girmez
+        # ve Family kimliğini etkilemez.
+        emit("app_foreground", "none", trigger="automatic")
 
     last_index = len(flow) - 1
     for index, (action_key, effect) in enumerate(flow):
-        if spec.add_detour and index == 1:
-            emit("wrong_screen", "route")
-            emit("back_button", "navigate_back")
-
         if spec.add_retry and index == last_index:
+            # `status` artık sınıflandırmayı etkilemez (bölüm 3 kural 4) — bu iki başarısız
+            # deneme normalize edilip sıkıştırılmaz, exact sembol dizisine ayrı adım olarak
+            # girer. Bu, retry-ağır bir davranışın "temiz" variant'tan ayrı, daha küçük bir
+            # variant'a bölünmesine yol açar (bölüm 9.3 exact fragmentation) — kasıtlı kabul.
             emit(action_key, effect, status="fail")
             emit(action_key, effect, status="fail")
 
-        widget = f"{action_key}_{spec.widget_suffix}"
-        target = {"ref": spec.target_ref} if (spec.target_ref and effect == "select") else None
+        target = spec.target_ref if (spec.target_ref and effect == "select") else None
         status = spec.final_status if index == last_index else "success"
-        emit(action_key, effect, widget=widget, target=target, status=status)
+        emit(action_key, effect, target=target, status=status)
 
     return events
 
@@ -188,58 +179,39 @@ def _day_list(profile: str, rng: random.Random) -> list[_OccurrenceSpec]:
             _OccurrenceSpec(day=d, minute_offset=0, session_index=0) for d in range(95, 101)
         ]
     if profile == "noisy":
-        return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, add_noise=True) for d in range(20)
-        ]
-    if profile == "misclick_heavy":
-        return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, add_detour=(d % 2 == 0))
-            for d in range(20)
-        ]
+        return [_OccurrenceSpec(day=d, minute_offset=0, session_index=0, add_noise=True) for d in range(20)]
     if profile == "retry_heavy":
         return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, add_retry=(d % 2 == 0))
-            for d in range(20)
-        ]
-    if profile == "widget_rename":
-        return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, widget_suffix="v1" if d < 10 else "v2")
-            for d in range(20)
+            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, add_retry=(d % 2 == 0)) for d in range(20)
         ]
     if profile == "target_variable":
         return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, target_ref=f"item_{d % 7}")
-            for d in range(20)
-        ]
-    if profile == "parameter_drift":
-        return [
-            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, target_ref="item_1" if d < 15 else "item_9")
-            for d in range(20)
+            _OccurrenceSpec(day=d, minute_offset=0, session_index=0, target_ref=f"item_{d % 7}") for d in range(20)
         ]
     raise ValueError(f"unknown profile: {profile}")
 
 
 _EXPECTED_DECISION: dict[str, HabitDecision] = {
-    "daily_regular": HabitDecision.PASS,
-    "daily_missing_days": HabitDecision.PASS,
-    "daily_high_frequency": HabitDecision.PASS,
-    "weekly_regular": HabitDecision.PASS,
-    "biweekly_regular": HabitDecision.PASS,
-    "monthly_regular": HabitDecision.PASS,
-    "irregular_recurring": HabitDecision.PASS,
-    "short_frequent": HabitDecision.PASS,
-    "long_workflow": HabitDecision.PASS,
-    "one_day_burst": HabitDecision.NOT_HABIT,
-    "two_day_burst": HabitDecision.NOT_HABIT,
-    "single_session_repeater": HabitDecision.NOT_HABIT,
-    "stale": HabitDecision.PASS,
-    "revived": HabitDecision.PASS,
-    "noisy": HabitDecision.PASS,
-    "misclick_heavy": HabitDecision.PASS,
-    "retry_heavy": HabitDecision.PASS,
-    "widget_rename": HabitDecision.PASS,
-    "target_variable": HabitDecision.PASS,
-    "parameter_drift": HabitDecision.PASS,
+    "daily_regular": HabitDecision.HABIT_DETECTED,
+    "daily_missing_days": HabitDecision.HABIT_DETECTED,
+    "daily_high_frequency": HabitDecision.HABIT_DETECTED,
+    "weekly_regular": HabitDecision.HABIT_DETECTED,
+    "biweekly_regular": HabitDecision.HABIT_DETECTED,
+    "monthly_regular": HabitDecision.HABIT_DETECTED,
+    "irregular_recurring": HabitDecision.HABIT_DETECTED,
+    "short_frequent": HabitDecision.HABIT_DETECTED,
+    "long_workflow": HabitDecision.HABIT_DETECTED,
+    "one_day_burst": HabitDecision.INSUFFICIENT_EVIDENCE,
+    # Yeni MVP kapısı `distinct day >= 2` (bölüm 6.7) — eski `>= 3` eşiğinden düşürüldü. İki
+    # farklı günde, sayısı ne olursa olsun, artık HABIT_DETECTED üretir; bu belgenin kendi
+    # eşiğinin doğrudan sonucudur (yalnızca tek-gün burst'ü açıkça reddeder, bölüm 9.8).
+    "two_day_burst": HabitDecision.HABIT_DETECTED,
+    "single_session_repeater": HabitDecision.INSUFFICIENT_EVIDENCE,
+    "stale": HabitDecision.HABIT_DETECTED,
+    "revived": HabitDecision.HABIT_DETECTED,
+    "noisy": HabitDecision.HABIT_DETECTED,
+    "retry_heavy": HabitDecision.HABIT_DETECTED,
+    "target_variable": HabitDecision.HABIT_DETECTED,
 }
 
 _FLOW_BY_PROFILE: dict[str, list[tuple[str, str]]] = {
@@ -285,7 +257,7 @@ class MultiHabitSubject:
 def generate_multi_habit_subject(
     project_id: str, subject_id: str, seed: int, base_time: datetime
 ) -> MultiHabitSubject:
-    """Aynı kullanıcı için birbirinden bağımsız birden fazla Habit (bölüm 113)."""
+    """Aynı kullanıcı için birbirinden bağımsız birden fazla Habit."""
 
     component_profiles = ("daily_regular", "weekly_regular", "monthly_regular", "irregular_recurring")
     flows = [

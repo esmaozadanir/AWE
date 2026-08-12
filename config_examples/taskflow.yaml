@@ -1,6 +1,6 @@
 # TaskFlow — üretkenlik/proje yönetimi uygulaması örnek entegrasyonu.
 #
-# Üçüncü ve en minimal ham telemetry biçimi (bölüm 32'nin kısa örneğine yakın): kısa alan
+# Üçüncü ve en minimal ham telemetry biçimi (bölüm 4'ün kısa örneğine yakın): kısa alan
 # adları, iç içe olmayan düz bir yapı. Adapter portability testleri bu üç konfigürasyonun
 # aynı AWE Core üzerinde, motor kodu değişmeden çalıştığını doğrular.
 project_id: taskflow
@@ -16,11 +16,10 @@ mapping:
   timestamp_path: ts
   action_key_path: element
   screen_path: page
+  duration_path: elapsedMs
 
   source:
     default: client
-  role:
-    default: action
   effect:
     path: interactionKind
     default: unknown
@@ -41,15 +40,7 @@ mapping:
   target:
     ref_path: entity
 
-  parameter_fields:
-    project_name: meta.projectName
-
-  breaks_episode_path: sessionEnd
-
-  assume_timezone: "UTC"
-
 engine_overrides:
   habit:
-    min_occurrences: 3
-    min_distinct_sessions: 2
-    min_distinct_days: 3
+    min_distinct_sessions: 3
+    min_distinct_days: 2

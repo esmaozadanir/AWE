@@ -1,4 +1,4 @@
-"""Suggestion listeleme ve dismiss endpoint'leri (bölüm 97)."""
+"""Suggestion listeleme ve dismiss endpoint'leri."""
 
 from __future__ import annotations
 
@@ -8,23 +8,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from awe.api.dependencies import get_db_session, get_project_config
-from awe.api.schemas import PlanResponse, SuggestionResponse
+from awe.api.schemas import IntentResponse, SuggestionResponse
 from awe.config import ProjectConfig
-from awe.services import PlanView, SuggestionView, dismiss_suggestion, list_subject_suggestions
+from awe.services import IntentView, SuggestionView, dismiss_suggestion, list_subject_suggestions
 
 router = APIRouter(prefix="/projects/{project_id}/subjects/{subject_id}", tags=["suggestions"])
 
 
-def _plan_response(plan: PlanView) -> PlanResponse:
-    return PlanResponse(
-        plan_id=plan.plan_id,
-        plan_type=plan.plan_type,
-        anchor_symbol=list(plan.anchor_symbol),
-        anchor_screen=plan.anchor_screen,
-        bindings=plan.bindings,
-        target_binding=plan.target_binding,
-        risk_decision=plan.risk_decision,
-        benefit_median_saved_actions=plan.benefit_median_saved_actions,
+def _intent_response(intent: IntentView) -> IntentResponse:
+    return IntentResponse(
+        intent_key=intent.intent_key,
+        mode=intent.mode,
+        destination_screen=intent.destination_screen,
+        target=intent.target,
+        requires_user_confirmation=intent.requires_user_confirmation,
+        risk_decision=intent.risk_decision,
+        benefit_saved_actions=intent.benefit_saved_actions,
+        benefit_level=intent.benefit_level,
     )
 
 
@@ -33,8 +33,7 @@ def _suggestion_response(view: SuggestionView) -> SuggestionResponse:
         suggestion_key=view.suggestion_key,
         state=view.state,
         reason_codes=view.reason_codes,
-        primary_plan=_plan_response(view.primary_plan),
-        fallback_plans=[_plan_response(p) for p in view.fallback_plans],
+        intent=_intent_response(view.intent),
         created_at=view.created_at,
         updated_at=view.updated_at,
         dismissed_at=view.dismissed_at,

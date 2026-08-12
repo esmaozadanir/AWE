@@ -1,4 +1,4 @@
-# FinancePilot — finans uygulaması. Domain portability için (bölüm 121).
+# FinancePilot — finans uygulaması. Domain portability için (bölüm 9).
 # ShopWave ile aynı mapping şeklini paylaşır, yalnızca iş sözlüğü (action_key değerleri)
 # farklıdır — bu da AWE Core'un domain-independence iddiasının bir parçasıdır: aynı mapping
 # şekli farklı iş sözlükleriyle sorunsuz çalışır.
@@ -15,15 +15,11 @@ mapping:
   timestamp_path: timestamp
   action_key_path: actionKey
   screen_path: screen
-  widget_path: widget
-  app_version_path: appVersion
+  duration_path: durationMs
 
   source:
     path: source
     default: unknown
-  role:
-    path: role
-    default: action
   effect:
     path: effect
     default: unknown
@@ -37,18 +33,7 @@ mapping:
   target:
     ref_path: target.ref
 
-  parameter_fields:
-    caption: metadata.caption
-    audience: metadata.audience
-
-  breaks_episode_path: breaksEpisode
-  breaks_episode_action_keys:
-    - log_out
-
-  assume_timezone: "UTC"
-
 engine_overrides:
   habit:
-    min_occurrences: 3
-    min_distinct_sessions: 2
-    min_distinct_days: 3
+    min_distinct_sessions: 3
+    min_distinct_days: 2

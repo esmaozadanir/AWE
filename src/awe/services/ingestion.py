@@ -1,4 +1,9 @@
-"""Raw event ingestion: idempotent kabul ve canonical Observation üretimi (bölüm 11, 97)."""
+"""Raw event ingestion: idempotent kabul ve canonical Observation üretimi (bölüm 6.1, 6.3).
+
+Aynı `(project_id, event_id)` daha önce farklı bir payload'la geldiyse ikinci event kabul
+edilmez ve karantinaya alınır (bölüm 6.3: "Aynı (projectId, eventId) farklı içerikle geldiyse
+conflict quarantine edilir") — ilk kabul edilen payload otorite kalır.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +14,20 @@ from sqlalchemy.orm import Session
 
 from awe.adapter import AdapterValidationError, build_observation
 from awe.config import ProjectConfig, log_event
-from awe.persistence.repository import event_exists, insert_event, insert_observation
+from awe.persistence.repository import (
+    event_exists,
+    fetch_event_payload,
+    insert_event,
+    insert_event_conflict,
+    insert_observation,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class IngestOutcome:
     accepted: bool
     duplicate: bool
+    conflict: bool = False
     event_id: str | None = None
     error: str | None = None
 
@@ -36,6 +48,18 @@ def ingest_event(
         )
 
     if event_exists(session, observation.project_id, observation.event_id):
+        first_payload = fetch_event_payload(session, observation.project_id, observation.event_id)
+        if first_payload is not None and first_payload != raw_event:
+            insert_event_conflict(
+                session, observation.project_id, observation.event_id, first_payload, raw_event, now
+            )
+            log_event(
+                "event_conflict_quarantined",
+                project_id=observation.project_id,
+                subject_id=observation.subject_id,
+                event_id=observation.event_id,
+            )
+            return IngestOutcome(accepted=False, duplicate=True, conflict=True, event_id=observation.event_id)
         return IngestOutcome(accepted=True, duplicate=True, event_id=observation.event_id)
 
     insert_event(session, observation.project_id, observation.event_id, observation.subject_id, now, raw_event)
