@@ -1,13 +1,4 @@
-# AWE Engine -- tum src/awe kaynak kodu, tek dosyada birlestirilmis.
-# Bu dosya calistirilmak icin degil, referans/inceleme icin uretilmistir.
-# Gercek proje src/awe/ altinda normal Python paketi olarak yasar.
-#
-# AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md spesifikasyonuna gore yeniden yazilmis motor.
-
-
-# ==============================================================================
 # FILE: src/awe/adapter/__init__.py
-# ==============================================================================
 from awe.adapter.mapping import AdapterMapping, FieldRule, TargetRule
 from awe.adapter.observation_builder import AdapterValidationError, build_observation
 
@@ -19,10 +10,7 @@ __all__ = [
     "build_observation",
 ]
 
-
-# ==============================================================================
 # FILE: src/awe/adapter/classification.py
-# ==============================================================================
 """Canonical Observation'dan ACTION/CONTEXT/IGNORE sınıflandırması (bölüm 6.2).
 
 Sınıflandırma yalnızca `trigger`, `effect` ve `source` üçlüsünden yapısal olarak türetilir.
@@ -82,9 +70,7 @@ def classify_event(observation: Observation) -> EventClassification:
     return EventClassification.CONTEXT
 
 
-# ==============================================================================
 # FILE: src/awe/adapter/mapping.py
-# ==============================================================================
 """Adapter mapping sözleşmesi: müşteriye özel raw event alanlarının canonical alanlara
 deklaratif olarak eşlenmesi (bölüm 6.1, 8).
 
@@ -178,9 +164,7 @@ class AdapterMapping:
     target: TargetRule = field(default_factory=TargetRule)
 
 
-# ==============================================================================
 # FILE: src/awe/adapter/observation_builder.py
-# ==============================================================================
 """Raw event dict'ini canonical Observation'a çeviren tek yer (bölüm 6.1).
 
 Zorunlu bir alan üretilemediğinde veya timestamp naive geldiğinde event reddedilir
@@ -345,15 +329,10 @@ def build_observation(raw: dict[str, Any], mapping: AdapterMapping) -> Observati
     )
 
 
-# ==============================================================================
 # FILE: src/awe/api/__init__.py
-# ==============================================================================
 
 
-
-# ==============================================================================
 # FILE: src/awe/api/dependencies.py
-# ==============================================================================
 """FastAPI bağımlılık enjeksiyonu: veritabanı session'ı ve proje konfigürasyonu."""
 
 from __future__ import annotations
@@ -403,10 +382,7 @@ def get_project_config(
 
 __all__ = ["get_db_session", "get_project_registry", "get_project_config", "get_settings"]
 
-
-# ==============================================================================
 # FILE: src/awe/api/main.py
-# ==============================================================================
 """FastAPI uygulama giriş noktası.
 
 Çalıştırma: `uvicorn awe.api.main:app --reload` (önce `alembic upgrade head` gerekir).
@@ -447,9 +423,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-# ==============================================================================
 # FILE: src/awe/api/routes_events.py
-# ==============================================================================
 """Event ingestion ve subject analiz endpoint'leri."""
 
 from __future__ import annotations
@@ -532,9 +506,7 @@ def post_analyze_subject(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/api/routes_suggestions.py
-# ==============================================================================
 """Suggestion listeleme ve dismiss endpoint'leri."""
 
 from __future__ import annotations
@@ -604,9 +576,7 @@ def post_dismiss_suggestion(
     return _suggestion_response(view)
 
 
-# ==============================================================================
 # FILE: src/awe/api/schemas.py
-# ==============================================================================
 """API'nin dışarıya sunduğu Pydantic request/response modelleri.
 
 Bu modeller `awe.domain` nesnelerini birebir yansıtmaz; yalnızca dışarıya sunulması gereken
@@ -669,17 +639,12 @@ class SuggestionResponse(BaseModel):
     dismissed_at: datetime | None
 
 
-# ==============================================================================
 # FILE: src/awe/benefit/__init__.py
-# ==============================================================================
 from awe.benefit.evaluation import evaluate_benefit
 
 __all__ = ["evaluate_benefit"]
 
-
-# ==============================================================================
 # FILE: src/awe/benefit/evaluation.py
-# ==============================================================================
 """Benefit Evaluator (bölüm 6.14): kısayolun kullanıcı ACTION sayısını azaltıp azaltmadığını
 ölçer. Popülasyon istatistiği (medyan/p25/p75) yoktur — her Shortcut Intent kendi tek,
 deterministik Benefit değerini taşır.
@@ -707,9 +672,7 @@ def evaluate_benefit(intent: ShortcutIntent, scope_length: int) -> BenefitEviden
     )
 
 
-# ==============================================================================
 # FILE: src/awe/config/__init__.py
-# ==============================================================================
 from awe.config.engine_config import (
     EngineConfig,
     EpisodeConfig,
@@ -740,10 +703,7 @@ __all__ = [
     "get_settings",
 ]
 
-
-# ==============================================================================
 # FILE: src/awe/config/engine_config.py
-# ==============================================================================
 """Motorun bütün eşik değerleri tek bir yerde toplanır.
 
 Belge (AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md) kasıtlı olarak çok az sayıda kesin eşik verir;
@@ -853,9 +813,7 @@ def default_engine_config() -> EngineConfig:
     return EngineConfig()
 
 
-# ==============================================================================
 # FILE: src/awe/config/logging_config.py
-# ==============================================================================
 """Yapılandırılmış (structured) log kurulumu (bölüm 132).
 
 Motor, her pipeline adımında `awe.engine` logger'ı üzerinden tek satırlık JSON olay kayıtları
@@ -908,9 +866,7 @@ def log_event(event: str, **fields: object) -> None:
     _ENGINE_LOGGER.info(event, extra={"awe_event": event, **fields})
 
 
-# ==============================================================================
 # FILE: src/awe/config/project_config.py
-# ==============================================================================
 """Proje bazlı konfigürasyon: hangi Adapter mapping'i, hangi timezone, hangi eşik override'ları.
 
 MVP kapsamında bölüm 97'nin API listesinde bir config-upload endpoint'i bulunmuyor; bu yüzden
@@ -1025,9 +981,7 @@ class ProjectRegistry:
         return sorted(p.stem for p in self._config_dir.glob("*.yaml"))
 
 
-# ==============================================================================
 # FILE: src/awe/config/settings.py
-# ==============================================================================
 """Süreç genelindeki ortam ayarları (veritabanı bağlantısı, log seviyesi vb.)."""
 
 from __future__ import annotations
@@ -1050,9 +1004,7 @@ def get_settings() -> Settings:
     return Settings()
 
 
-# ==============================================================================
 # FILE: src/awe/domain/__init__.py
-# ==============================================================================
 """AWE Core domain modelleri.
 
 Bu paket, hiçbir uygulamaya özel iş kavramı (order, course, lesson, product vb.) içermez.
@@ -1060,10 +1012,7 @@ Adapter/Mapping ve proje konfigürasyonu bunun dışındadır. `tests/scenarios/
 test_domain_universality.py` bu kısıtı otomatik olarak denetler.
 """
 
-
-# ==============================================================================
 # FILE: src/awe/domain/benefit.py
-# ==============================================================================
 """Benefit Evaluator'ın kanıt modeli (bölüm 6.14).
 
 `observed_actions - planned_actions` deterministik farkıdır; eski tasarımın medyan/p25/p75
@@ -1098,9 +1047,7 @@ class BenefitEvidence:
         return BenefitLevel.CLEAR
 
 
-# ==============================================================================
 # FILE: src/awe/domain/enums.py
-# ==============================================================================
 """AWE Core'un paylaştığı, uygulamadan bağımsız sabit kelime dağarcığı.
 
 Buradaki değerler AWE Core'un canonical sözleşmesidir (bkz. AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md,
@@ -1322,9 +1269,7 @@ class ReasonCode(StrEnum):
     AMBIGUOUS_TIMESTAMP_ORDER = "ambiguous_timestamp_order"
 
 
-# ==============================================================================
 # FILE: src/awe/domain/episode.py
-# ==============================================================================
 """Episode Candidate modeli.
 
 Family eşleştirmesine giren aday davranış birimi. İki kaynaktan üretilir: bir OSeries'in
@@ -1373,9 +1318,7 @@ class EpisodeCandidate:
         return tuple(step.target for step in self.steps)
 
 
-# ==============================================================================
 # FILE: src/awe/domain/family.py
-# ==============================================================================
 """Exact Base Family modeli (bölüm 6.5).
 
 Eski tasarımdan farklı olarak fuzzy/ağırlıklı benzerlik yoktur: bir family tamamen aynı
@@ -1410,9 +1353,7 @@ class BaseFamily:
         return len(self.occurrence_ids)
 
 
-# ==============================================================================
 # FILE: src/awe/domain/habit.py
-# ==============================================================================
 """Habit Evaluator'ın kanıt ve karar modelleri (bölüm 6.7).
 
 Bilinçli olarak sade: regularity/entropy/lift gibi gelişmiş istatistikler burada yoktur
@@ -1465,9 +1406,7 @@ class HabitAssessment:
     reason_codes: tuple[ReasonCode, ...] = ()
 
 
-# ==============================================================================
 # FILE: src/awe/domain/observation.py
-# ==============================================================================
 """Canonical Observation modeli (bkz. AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md bölüm 4).
 
 Observation, müşteriye özel raw event'in Adapter tarafından üretilen, uygulamadan bağımsız
@@ -1535,9 +1474,7 @@ class Observation:
     quality: ObservationQuality = field(default_factory=lambda: ObservationQuality(has_screen=False))
 
 
-# ==============================================================================
 # FILE: src/awe/domain/plan.py
-# ==============================================================================
 """Anchor Resolver, Scope Projector, Destination Resolver ve Shortcut Intent Builder
 çıktı modelleri (bölüm 6.9-6.12).
 
@@ -1608,9 +1545,7 @@ class ShortcutIntent:
     reason_codes: tuple[ReasonCode, ...] = ()
 
 
-# ==============================================================================
 # FILE: src/awe/domain/risk.py
-# ==============================================================================
 """Risk Evaluator'ın kanıt ve karar modelleri (bölüm 6.13).
 
 Tek bir skor değil, açıklanabilir bir vektördür. Selector yalnızca `RiskDecision` kapısına
@@ -1655,9 +1590,7 @@ class RiskAssessment:
     reason_codes: tuple[ReasonCode, ...] = ()
 
 
-# ==============================================================================
 # FILE: src/awe/domain/screen_evidence.py
-# ==============================================================================
 """Screen Transition Evidence modeli (bölüm 6.8).
 
 Bir ACTION sonrasında gözlenen opaque screen anahtarının session'lar arası tutarlılığını
@@ -1683,9 +1616,7 @@ class ScreenTransitionEvidence:
     conflicting_screens: tuple[str, ...] = ()
 
 
-# ==============================================================================
 # FILE: src/awe/domain/series.py
-# ==============================================================================
 """O-Series modeli: bir session içindeki tek structural chunk (bölüm 6.3).
 
 Eski tasarımdan farklı olarak sınır, açık bir `breaksEpisode` bayrağı veya "completion effect"
@@ -1742,9 +1673,7 @@ class OSeries:
         return len(self.steps) == 0
 
 
-# ==============================================================================
 # FILE: src/awe/domain/suggestion.py
-# ==============================================================================
 """Selector çıktısı ve suggestion lifecycle modeli (bölüm 6.15).
 
 `SELECTED`, "kullanıcıya gösterildi" değil, "gösterilmeye uygun aday" demektir — gösterim
@@ -1790,9 +1719,7 @@ class Suggestion:
     dismiss_cooldown_until: datetime | None = None
 
 
-# ==============================================================================
 # FILE: src/awe/domain/target.py
-# ==============================================================================
 """Target Resolver çıktı modeli (bölüm 6.6).
 
 Bir Base Family, occurrence'larının target fingerprint'ine (her adımın gözlenen target'ı,
@@ -1840,9 +1767,7 @@ class TargetVariant:
         return None
 
 
-# ==============================================================================
 # FILE: src/awe/domain/tokens.py
-# ==============================================================================
 """Karşılaştırma için canonical davranış sembolü ve adım modeli.
 
 Tasarım kararı (bölüm 6.4 Episode Candidate Builder, 6.5 Exact Base Family): karşılaştırma
@@ -1895,17 +1820,12 @@ class BehaviorStep:
         return self.token.symbol
 
 
-# ==============================================================================
 # FILE: src/awe/episodes/__init__.py
-# ==============================================================================
 from awe.episodes.candidates import build_episode_candidates
 
 __all__ = ["build_episode_candidates"]
 
-
-# ==============================================================================
 # FILE: src/awe/episodes/candidates.py
-# ==============================================================================
 """Episode Candidate Builder: Exact Base Family eşleştirmesine giren aday davranış
 birimlerini üretir. Henüz habit kararı vermez.
 
@@ -2081,17 +2001,12 @@ def build_episode_candidates(all_series: list[OSeries], config: EpisodeConfig) -
     return candidates
 
 
-# ==============================================================================
 # FILE: src/awe/families/__init__.py
-# ==============================================================================
 from awe.families.matching import compute_family_id, group_into_families
 
 __all__ = ["compute_family_id", "group_into_families"]
 
-
-# ==============================================================================
 # FILE: src/awe/families/matching.py
-# ==============================================================================
 """Exact Base Family (bölüm 6.5): tamamen aynı yapısal izi taşıyan `EpisodeCandidate`'ları
 aynı family'de toplar.
 
@@ -2146,17 +2061,12 @@ def group_into_families(candidates: list[EpisodeCandidate]) -> list[BaseFamily]:
     return families
 
 
-# ==============================================================================
 # FILE: src/awe/habit/__init__.py
-# ==============================================================================
 from awe.habit.assessment import evaluate_habit
 
 __all__ = ["evaluate_habit"]
 
-
-# ==============================================================================
 # FILE: src/awe/habit/assessment.py
-# ==============================================================================
 """Habit Evaluator (bölüm 6.7): tek görevi recurrence ölçmektir.
 
 MVP kapısı: `distinct session >= 3 AND distinct calendar day >= 2`. Bu katman regularity/
@@ -2232,17 +2142,12 @@ def evaluate_habit(
     return HabitAssessment(variant_id=variant.variant_id, decision=HabitDecision.HABIT_DETECTED, evidence=evidence)
 
 
-# ==============================================================================
 # FILE: src/awe/lifecycle/__init__.py
-# ==============================================================================
 from awe.lifecycle.transitions import dismiss, next_state_for_reanalysis
 
 __all__ = ["dismiss", "next_state_for_reanalysis"]
 
-
-# ==============================================================================
 # FILE: src/awe/lifecycle/transitions.py
-# ==============================================================================
 """Suggestion lifecycle geçişleri.
 
 Bir suggestion DISMISSED durumundayken cooldown süresi dolar ve davranış organik olarak
@@ -2295,17 +2200,12 @@ def dismiss(now: datetime, config: LifecycleConfig) -> tuple[SuggestionState, da
     return SuggestionState.DISMISSED, now + timedelta(days=config.dismiss_cooldown_days)
 
 
-# ==============================================================================
 # FILE: src/awe/ordering/__init__.py
-# ==============================================================================
 from awe.ordering.order_session import group_by_session, order_session
 
 __all__ = ["group_by_session", "order_session"]
 
-
-# ==============================================================================
 # FILE: src/awe/ordering/order_session.py
-# ==============================================================================
 """Deterministik session içi sıralama (bölüm 6.3).
 
 Bu modül yalnızca genel, sınıflandırmadan bağımsız sıralama + eşit-timestamp tespiti yapar.
@@ -2345,18 +2245,13 @@ def order_session(observations: list[Observation]) -> tuple[list[Observation], O
     return ordered, confidence
 
 
-# ==============================================================================
 # FILE: src/awe/persistence/__init__.py
-# ==============================================================================
 from awe.persistence.database import create_database_engine, create_session_factory, session_scope
 from awe.persistence.models import Base
 
 __all__ = ["Base", "create_database_engine", "create_session_factory", "session_scope"]
 
-
-# ==============================================================================
 # FILE: src/awe/persistence/database.py
-# ==============================================================================
 """Veritabanı engine/session kurulumu."""
 
 from __future__ import annotations
@@ -2390,9 +2285,7 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
         session.close()
 
 
-# ==============================================================================
 # FILE: src/awe/persistence/models.py
-# ==============================================================================
 """SQLAlchemy şema tanımları.
 
 Yalnızca portable tipler kullanılır (`String`, `Integer`, `Float`, `Boolean`, `UTCDateTime`,
@@ -2564,9 +2457,7 @@ class SuggestionRecord(Base):
     __table_args__ = (SqlIndex("ix_suggestions_subject_scope", "project_id", "subject_id"),)
 
 
-# ==============================================================================
 # FILE: src/awe/persistence/repository.py
-# ==============================================================================
 """Analiz pipeline'ının ihtiyaç duyduğu okuma/yazma işlemleri.
 
 Bu katman iş kuralı içermez; yalnızca domain nesneleri ile veritabanı satırları arasında köprü
@@ -2801,9 +2692,7 @@ def fetch_shortcut_intent_by_key(session: Session, intent_key: str) -> ShortcutI
     return session.execute(stmt).scalar_one_or_none()
 
 
-# ==============================================================================
 # FILE: src/awe/persistence/serialization.py
-# ==============================================================================
 """Domain modelleri ile JSON-uyumlu sözlükler arasında dönüşüm.
 
 Bu modül yalnızca veri şekli dönüşümü yapar; hiçbir iş kuralı içermez.
@@ -3023,9 +2912,7 @@ def str_to_risk_decision(value: str) -> RiskDecision:
     return RiskDecision(value)
 
 
-# ==============================================================================
 # FILE: src/awe/persistence/types.py
-# ==============================================================================
 """SQLite, `DateTime(timezone=True)` sütunlarında dahi timezone bilgisini kalıcı olarak
 saklamaz; okuma sırasında naive bir datetime döner. Bu, aware/naive datetime karışmasına yol
 açar (bölüm 15'in açıkça yasakladığı durum). `UTCDateTime`, hem yazarken UTC'ye normalize eder
@@ -3060,9 +2947,7 @@ class UTCDateTime(TypeDecorator):
         return value.astimezone(UTC)
 
 
-# ==============================================================================
 # FILE: src/awe/planner/__init__.py
-# ==============================================================================
 from awe.planner.anchors import resolve_anchor
 from awe.planner.destination import resolve_destination
 from awe.planner.intent import build_shortcut_intent
@@ -3070,10 +2955,7 @@ from awe.planner.scope import project_scope
 
 __all__ = ["resolve_anchor", "project_scope", "resolve_destination", "build_shortcut_intent"]
 
-
-# ==============================================================================
 # FILE: src/awe/planner/anchors.py
-# ==============================================================================
 """Anchor Resolver (bölüm 6.9): tekrarlanan davranışın gözlenen amaç/son işlem noktasını bulur.
 Shortcut değildir; yalnızca `HABIT_DETECTED` variant üzerinde çalışır.
 
@@ -3211,9 +3093,7 @@ def resolve_anchor(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/planner/destination.py
-# ==============================================================================
 """Destination Resolver (bölüm 6.11): tek görevi açılacak opaque `screen` anahtarını seçmektir.
 
 `screen`, karşılaştırma sembolünün bir parçası olduğu için (bölüm 6.5) aynı family'nin tüm
@@ -3282,9 +3162,7 @@ def resolve_destination(
     return _UNRESOLVED
 
 
-# ==============================================================================
 # FILE: src/awe/planner/intent.py
-# ==============================================================================
 """Shortcut Intent Builder (bölüm 6.12): yalnızca çözülmüş Habit + Anchor + Scope + Destination
 sonucunu runtime sözleşmesine çevirir. `EXECUTE` modu yoktur.
 """
@@ -3366,9 +3244,7 @@ def build_shortcut_intent(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/planner/scope.py
-# ==============================================================================
 """Scope Projector (bölüm 6.10): yeni davranış kararı vermez, Anchor çözülmüşse family
 prefix'ini mekanik olarak keser. Anchor ambiguous/unresolved ise scope boş kalır."""
 
@@ -3390,17 +3266,12 @@ def project_scope(family_symbols: tuple[Symbol, ...], variant_id: str, anchor: S
     return Scope(variant_id=variant_id, included=included, excluded_trailing=excluded_trailing)
 
 
-# ==============================================================================
 # FILE: src/awe/risk/__init__.py
-# ==============================================================================
 from awe.risk.evaluation import evaluate_risk
 
 __all__ = ["evaluate_risk"]
 
-
-# ==============================================================================
 # FILE: src/awe/risk/evaluation.py
-# ==============================================================================
 """Risk Evaluator (bölüm 6.13): üretilen gerçek Shortcut Intent'i değerlendirir; Anchor
 effect'ini otomatik çalıştırdığını varsaymaz. Çıktı tek bir skor değil, açıklanabilir bir
 vektördür — Selector yalnızca `RiskDecision.ALLOW`/`BLOCK` kapısına bakar.
@@ -3556,17 +3427,12 @@ def evaluate_risk(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/screen_evidence/__init__.py
-# ==============================================================================
 from awe.screen_evidence.evidence import build_screen_transition_evidence
 
 __all__ = ["build_screen_transition_evidence"]
 
-
-# ==============================================================================
 # FILE: src/awe/screen_evidence/evidence.py
-# ==============================================================================
 """Screen Transition Evidence (bölüm 6.8): bir ACTION sonrasında gözlenen opaque screen
 anahtarını toplar. Bu katman ekranın semantik anlamını bulmaz; nedensellik kanıtlamaz,
 yalnızca korelasyon gösterir (bölüm 9.2).
@@ -3701,17 +3567,12 @@ def build_screen_transition_evidence(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/selection/__init__.py
-# ==============================================================================
 from awe.selection.selector import Candidate, select
 
 __all__ = ["Candidate", "select"]
 
-
-# ==============================================================================
 # FILE: src/awe/selection/selector.py
-# ==============================================================================
 """Selector (bölüm 6.15): upstream kararları tekrar hesaplamaz, tek final skor üretmez.
 
 MVP yüksek-precision politikası nedeniyle `LIMITED` dahil `CLEAR` dışındaki Benefit seviyeleri
@@ -3791,11 +3652,18 @@ def _dedupe_key(candidate: Candidate, project_id: str, subject_id: str) -> tuple
 def _ranking_key(candidate: Candidate) -> tuple:
     evidence = candidate.habit.evidence
     assert evidence is not None  # eligibility already guarantees this
+    # Evidence/support gelir saved_actions'tan ÖNCE (bkz. docs/engine-decisions.md #6): iki
+    # farklı exact family aynı runtime intent'e (mode, destination, target) düşüp dedupe
+    # olduğunda, nadir ama o occurrence'da bir adım fazla tasarruf ettiren bir varyantın, çok
+    # daha sık ve tutarlı gözlenen bir varyantı ezmesini istemiyoruz -- Habit Evaluator'ın
+    # kendisi zaten HABIT_DETECTED kararını distinct_days/distinct_sessions üzerinden veriyor,
+    # sıralama bununla tutarlı olmalı. saved_actions yalnızca eşit destekli adaylar arasında
+    # tie-break olarak kalır.
     return (
         -_STRENGTH_RANK[candidate.intent.anchor.strength],
-        -candidate.benefit.saved_actions,
         -evidence.distinct_days,
         -evidence.distinct_sessions,
+        -candidate.benefit.saved_actions,
         -candidate.intent.supporting_occurrences,
         candidate.intent.intent_id,
     )
@@ -3834,17 +3702,12 @@ def select(candidates: list[Candidate], project_id: str, subject_id: str) -> lis
     return results
 
 
-# ==============================================================================
 # FILE: src/awe/series/__init__.py
-# ==============================================================================
 from awe.series.extraction import extract_series
 
 __all__ = ["extract_series"]
 
-
-# ==============================================================================
 # FILE: src/awe/series/extraction.py
-# ==============================================================================
 """O-Series Builder: bir session'ın sıralı Observation akışını structural chunk'lara böler
 (bölüm 6.3). Henüz Family/Habit/Risk/Benefit hesaplamaz.
 
@@ -3979,9 +3842,7 @@ def _build_chunk(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/services/__init__.py
-# ==============================================================================
 from awe.services.analysis import AnalysisSummary, VariantAnalysisSummary, analyze_subject
 from awe.services.ingestion import IngestOutcome, ingest_batch, ingest_event
 from awe.services.suggestions import (
@@ -4004,10 +3865,7 @@ __all__ = [
     "IntentView",
 ]
 
-
-# ==============================================================================
 # FILE: src/awe/services/analysis.py
-# ==============================================================================
 """Subject analizi: pipeline'ın tamamını (O-Series Builder → ... → Selector) uçtan uca bağlar.
 
 Motor batch/recompute modelindedir (bkz. `awe.persistence.models` modül docstring'i, bölüm
@@ -4284,9 +4142,7 @@ def analyze_subject(
     )
 
 
-# ==============================================================================
 # FILE: src/awe/services/ingestion.py
-# ==============================================================================
 """Raw event ingestion: idempotent kabul ve canonical Observation üretimi (bölüm 6.1, 6.3).
 
 Aynı `(project_id, event_id)` daha önce farklı bir payload'la geldiyse ikinci event kabul
@@ -4368,9 +4224,7 @@ def ingest_batch(
     return [ingest_event(session, project_config, url_project_id, raw_event, now) for raw_event in raw_events]
 
 
-# ==============================================================================
 # FILE: src/awe/services/suggestions.py
-# ==============================================================================
 """Subject'e ait suggestion'ların dışa sunulacak görünümü ve dismiss akışı."""
 
 from __future__ import annotations
@@ -4475,17 +4329,12 @@ def dismiss_suggestion(
     return _to_suggestion_view(session, record)
 
 
-# ==============================================================================
 # FILE: src/awe/targeting/__init__.py
-# ==============================================================================
 from awe.targeting.resolver import resolve_targets
 
 __all__ = ["resolve_targets"]
 
-
-# ==============================================================================
 # FILE: src/awe/targeting/resolver.py
-# ==============================================================================
 """Target Resolver (bölüm 6.6): Base Family occurrence'larını target fingerprint ile böler.
 
 Occurrence fingerprint'i `(step_1.target, ..., step_n.target)`. Her exact fingerprint ayrı
@@ -4548,9 +4397,7 @@ def resolve_targets(family: BaseFamily, candidates_by_id: dict[str, EpisodeCandi
     return variants
 
 
-# ==============================================================================
 # FILE: src/awe/testing/__init__.py
-# ==============================================================================
 from awe.testing.generators import (
     PROFILE_NAMES,
     GeneratedSubject,
@@ -4567,10 +4414,7 @@ __all__ = [
     "generate_multi_habit_subject",
 ]
 
-
-# ==============================================================================
 # FILE: src/awe/testing/generators.py
-# ==============================================================================
 """Deterministik sentetik event log üretici.
 
 Her profil, gerçek bir kullanıcı davranış deseni için (günlük, haftalık, burst, gürültülü, vb.)
@@ -4860,6 +4704,3 @@ def generate_multi_habit_subject(
     return MultiHabitSubject(
         project_id=project_id, subject_id=subject_id, events=events, component_profiles=component_profiles
     )
-
-
-# DOSYA SONU -- src/awe altindaki tum paketler bu dosyada mevcuttur (68 dosya).

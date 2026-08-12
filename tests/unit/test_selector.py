@@ -173,6 +173,35 @@ def test_identical_runtime_intents_are_deduped_keeping_the_stronger_one():
     assert ReasonCode.DUPLICATE_PLAN in weak_result.reason_codes
 
 
+def test_dedupe_prefers_stronger_evidence_over_larger_saved_actions():
+    """Regresyon: aynı (mode, destination, target)'a iki farklı family düşüp dedupe olduğunda,
+    nadir ama tesadüfen bir adım fazla tasarruf eden varyant, çok daha sık/tutarlı gözlenen
+    varyantı ezmemeli. Gerçekçi LearnLoop probu bunu tam tersi (saved_actions önce) sırayla
+    üretmişti: 3 occurrence'lık bir bildirim-molası yolu (saved=3), 12 occurrence'lık temiz
+    yolu (saved=2) deduped ediyordu."""
+
+    common = _candidate(
+        "common_path",
+        observed=3,
+        planned=1,
+        saved_days=12,
+        saved_sessions=12,
+        supporting_occurrences=12,
+    )
+    detour = _candidate(
+        "rare_detour",
+        observed=4,
+        planned=1,
+        saved_days=3,
+        saved_sessions=3,
+        supporting_occurrences=3,
+    )
+    results = select([common, detour], "proj", "subj")
+
+    assert _outcome(results, "common_path") == SelectionOutcome.SELECTED
+    assert _outcome(results, "rare_detour") == SelectionOutcome.DEDUPED
+
+
 def test_different_targets_are_never_deduped():
     first = _candidate("i1", target="item_1", destination_screen="detail")
     second = _candidate("i2", target="item_2", destination_screen="detail")

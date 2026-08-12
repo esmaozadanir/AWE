@@ -142,3 +142,36 @@ config-yükleme mekanizması, structured logging ve suggestion lifecycle'ı ele 
   konfigürasyon alanıydı, kod incelemesiyle doğrulandı) ve kaldırıldı.
 - API'de hâlâ hiçbir kimlik doğrulama/yetkilendirme mekanizması yoktur — bu, önceki
   incelemede de flagged edilmiş, henüz kapatılmamış bir MVP açığıdır.
+
+## 6. Kullanıcı talebiyle yapılan bilinçli tasarım kararı: Selector sıralama sırası
+
+Bölüm 6.15 Selector'ın lexicographic sıralama alanlarını sayar
+(`strength, saved_actions, distinct_days, distinct_sessions, occurrence_count, intent_id`)
+ama bunların hangi öncelik SIRASIYLA uygulanacağını belirtmez. İlk uygulama belgedeki listeleme
+sırasını harfiyen izledi: `saved_actions` (`strength`'ten hemen sonra), `distinct_days` ve
+`distinct_sessions`'tan ÖNCE geliyordu.
+
+Gerçekçi (uydurulmamış) bir LearnLoop veri setiyle test edilince bunun somut bir sorun
+doğurduğu görüldü: aynı runtime intent'e (aynı `mode`/`destination`/`target`) iki farklı exact
+family düşüyordu — biri temiz, 12-occurrence'lık ana yol (`saved_actions=2`), diğeri nadir,
+3-occurrence'lık bir "bildirim kontrolü" dolambacı (araya bir adım daha girdiği için
+`saved_actions=3`). `saved_actions` önce sıralanınca Selector, 12 kat daha az gözlenen dolambaç
+varyantını "kazanan" seçip asıl temsilci alışkanlığı `DEDUPED` ile eliyordu.
+
+Değerlendirilen ve reddedilen alternatifler:
+
+- **Mevcut sırayı koru** — reddedildi: nadir bir path'in tek occurrence'ının tesadüfen bir adım
+  fazla tasarruf etmesi, o path'i "temsilci" ilan etmek için zayıf bir gerekçe; Habit
+  Evaluator'ın kendisi zaten HABIT_DETECTED kararını `distinct_days`/`distinct_sessions`
+  üzerinden veriyor (bölüm 6.7) — sıralamanın bu felsefeyle çelişmesi tutarsız.
+- **Deduped family'lerin evidence'ını birleştir** (occurrence/day/session sayılarını topla,
+  `saved_actions`'ı ağırlıklı ortalama veya en yaygın path'in değeri yap) — daha "doğru" ama
+  Benefit/Habit şu an yalnızca TEK bir family'nin kendi occurrence'larından hesaplanıyor;
+  birleştirme, Selector'dan önce ayrı bir evidence-merge adımı gerektirir. Daha büyük bir
+  mimari değişiklik olduğu için MVP kapsamında ertelendi.
+- **Seçilen: `distinct_days`/`distinct_sessions`'ı `saved_actions`'ın ÖNÜNE al** — sıralama
+  anahtarı artık `(-strength, -distinct_days, -distinct_sessions, -saved_actions,
+  -occurrence_count, intent_id)`. Evidence/support kazananı belirler; `saved_actions` yalnızca
+  eşit destekli adaylar arasında ince ayırıcı (tie-break) olarak kalır. Habit Evaluator'ın
+  kendi kapısıyla tutarlı, ek mimari değişiklik gerektirmiyor (bkz.
+  `awe.selection.selector._ranking_key`).

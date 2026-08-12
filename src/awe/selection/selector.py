@@ -77,11 +77,18 @@ def _dedupe_key(candidate: Candidate, project_id: str, subject_id: str) -> tuple
 def _ranking_key(candidate: Candidate) -> tuple:
     evidence = candidate.habit.evidence
     assert evidence is not None  # eligibility already guarantees this
+    # Evidence/support gelir saved_actions'tan ÖNCE (bkz. docs/engine-decisions.md #6): iki
+    # farklı exact family aynı runtime intent'e (mode, destination, target) düşüp dedupe
+    # olduğunda, nadir ama o occurrence'da bir adım fazla tasarruf ettiren bir varyantın, çok
+    # daha sık ve tutarlı gözlenen bir varyantı ezmesini istemiyoruz -- Habit Evaluator'ın
+    # kendisi zaten HABIT_DETECTED kararını distinct_days/distinct_sessions üzerinden veriyor,
+    # sıralama bununla tutarlı olmalı. saved_actions yalnızca eşit destekli adaylar arasında
+    # tie-break olarak kalır.
     return (
         -_STRENGTH_RANK[candidate.intent.anchor.strength],
-        -candidate.benefit.saved_actions,
         -evidence.distinct_days,
         -evidence.distinct_sessions,
+        -candidate.benefit.saved_actions,
         -candidate.intent.supporting_occurrences,
         candidate.intent.intent_id,
     )
