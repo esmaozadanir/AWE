@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from awe.api.routes_events import router as events_router
 from awe.api.routes_suggestions import router as suggestions_router
@@ -28,6 +29,15 @@ app = FastAPI(
     description="Event log tabanlı habit-to-shortcut öneri motoru.",
     version="0.1.0",
     lifespan=_lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    # Local dev/demo only (client apps are typically served from a different origin/port,
+    # e.g. a Flutter web build on :5000 calling this API on :8000) -- tighten before any
+    # real deployment.
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(events_router)
 app.include_router(suggestions_router)

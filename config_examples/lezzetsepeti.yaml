@@ -1,0 +1,40 @@
+# LezzetSepeti — yemek sipariş uygulaması örnek entegrasyonu (Flutter demo).
+#
+# Ham event alan adları testing/generators.py ile aynı sözleşmeyi kullanır
+# (eventId/projectId/subjectId/sessionId/timestamp/actionKey/effect/trigger/
+# screen/target/status/duration) — bu yüzden mapping 1:1'dir.
+project_id: lezzetsepeti
+display_name: "LezzetSepeti — Yemek Sipariş Uygulaması"
+timezone: "Europe/Istanbul"
+
+mapping:
+  mapping_version: "lezzetsepeti-v1"
+  event_id_path: eventId
+  project_id_path: projectId
+  subject_id_path: subjectId
+  session_id_path: sessionId
+  timestamp_path: timestamp
+  action_key_path: actionKey
+  screen_path: screen
+  duration_path: duration
+
+  source:
+    path: source
+    default: unknown
+  effect:
+    path: effect
+    default: unknown
+  trigger:
+    path: trigger
+    default: unknown
+  status:
+    path: status
+    default: unknown
+
+  target:
+    ref_path: target
+
+engine_overrides:
+  habit:
+    min_distinct_sessions: 3
+    min_distinct_days: 2
