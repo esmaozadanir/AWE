@@ -1,9 +1,11 @@
 """Episode Candidate modeli.
 
-Family eşleştirmesine giren aday davranış birimi. İki kaynaktan üretilir: bir OSeries'in
-tamamı (`FULL_CHUNK`) ya da farklı chunk/session'lar arasında bulunan, sıra-korumalı exact
-ortak alt diziler (`COMMON_SUBSEQUENCE` — bkz. `awe.episodes.candidates` modül docstring'i).
-Henüz habit kararı vermez — yalnızca Exact Base Family'nin girişidir.
+Family eşleştirmesine giren aday davranış birimi. Üç kaynaktan üretilir: bir OSeries'in tamamı
+(`FULL_CHUNK`), farklı chunk/session'lar arasında bulunan sıra-korumalı exact ortak alt diziler
+(`COMMON_SUBSEQUENCE`), ya da bunlardan strong pozisyonlarda (target-carrying/outcome-evidence
+adımlar) çakışan "endpoint hypothesis" adayları olarak türetilen `EPISODE_SPAN` (bkz.
+`awe.episodes.candidates` modül docstring'i, docs/engine-decisions.md #10). Henüz habit kararı
+vermez — yalnızca Exact Base Family'nin girişidir.
 """
 
 from __future__ import annotations

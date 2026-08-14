@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from awe.config.engine_config import ScreenEvidenceConfig
 from awe.domain.enums import (
+    OUTCOME_EVIDENCE_EFFECTS,
     AnchorStatus,
     AnchorStrength,
     ObservationEffect,
@@ -25,22 +26,6 @@ from awe.domain.target import TargetVariant
 from awe.domain.tokens import Symbol
 from awe.screen_evidence import build_screen_transition_evidence
 
-_OUTCOME_EVIDENCE_EFFECTS = frozenset(
-    effect.value
-    for effect in (
-        ObservationEffect.SUBMIT,
-        ObservationEffect.CREATE,
-        ObservationEffect.DELETE,
-        ObservationEffect.CONFIRM,
-        ObservationEffect.UPDATE,
-        ObservationEffect.TOGGLE,
-        ObservationEffect.REQUEST,
-        ObservationEffect.DOWNLOAD,
-        ObservationEffect.SELECT,
-        ObservationEffect.FILTER,
-        ObservationEffect.SORT,
-    )
-)
 ROUTE_OPEN_EFFECTS = frozenset(effect.value for effect in (ObservationEffect.ROUTE, ObservationEffect.OPEN))
 
 
@@ -75,7 +60,7 @@ def resolve_anchor(
         )
 
     target_positions = {i for i in range(len(family_symbols)) if variant.fingerprint[i] is not None}
-    outcome_positions = {i for i, symbol in enumerate(family_symbols) if symbol[1] in _OUTCOME_EVIDENCE_EFFECTS}
+    outcome_positions = {i for i, symbol in enumerate(family_symbols) if symbol[1] in OUTCOME_EVIDENCE_EFFECTS}
     strong_positions = target_positions | outcome_positions
 
     if strong_positions:

@@ -2,12 +2,16 @@
 (bölüm 6.3). Henüz Family/Habit/Risk/Benefit hesaplamaz.
 
 Eski tasarımdan farklı olarak sınır `breaksEpisode` bayrağı ya da "completion effect" tahmini
-değildir (bu alanlar artık yok). Yalnızca iki yapısal kural chunk sınırı çizer:
-1. Aynı timestamp'te 2+ ACTION-classified event varsa sıra üretilmez — bu grup hiçbir chunk'ın
-   step dizisine girmez (yalnızca trailing raw kanıt olarak korunur), mevcut chunk kesilir.
-2. `navigation`/`notification`/`deeplink` tetikleyicili bir ACTION, mevcut chunk zaten en az
-   bir step içeriyorsa (yani "akışın ortasında" geliyorsa) yeni bir chunk başlatır; kendisi
-   yeni chunk'ın giriş adımı olur.
+değildir (bu alanlar artık yok). Tek bir yapısal kural chunk sınırı çizer: aynı timestamp'te
+2+ ACTION-classified event varsa sıra üretilmez — bu grup hiçbir chunk'ın step dizisine girmez
+(yalnızca trailing raw kanıt olarak korunur), mevcut chunk kesilir ("ambiguity barrier").
+
+Bir session'ın geri kalanı, bu belirsizlik barajı dışında HİÇ bölünmez — özellikle
+`navigation`/`notification`/`deeplink` tetikleyicili bir ACTION artık akışın ortasında bile
+gelse chunk'ı bölmez (kullanıcı talebiyle kaldırılan eski bir kural; gerekçe için bkz.
+docs/engine-decisions.md). Episode Candidate Builder'ın sıra-korumalı LCS eşleştirmesi zaten
+araya giren alakasız adımları (bir bildirim kontrolü gibi) tolere ediyor — bu kural onun önüne
+geçip tek bir session'ın akışını erkenden ve kabaca bölüyordu.
 
 Retry/detour sıkıştırması kasıtlı olarak yoktur (bölüm 6.4: "Fuzzy merge yoktur") — tekrarlanan
 adımlar veya geri-navigasyonlar olduğu gibi kalır; bu, exact family fragmentation riskini
@@ -21,10 +25,6 @@ from awe.domain.enums import EventClassification, ObservationTrigger, OrderingCo
 from awe.domain.observation import Observation
 from awe.domain.series import OSeries
 from awe.domain.tokens import BehaviorStep, BehaviorToken
-
-_CHUNK_STARTING_TRIGGERS = frozenset(
-    {ObservationTrigger.NAVIGATION, ObservationTrigger.NOTIFICATION, ObservationTrigger.DEEPLINK}
-)
 
 _ChunkEntry = tuple[Observation, bool]
 """(observation, excluded_from_steps). `excluded_from_steps=True`, bu event'in bir ambiguity
@@ -50,7 +50,6 @@ def extract_series(
 
     chunks: list[list[_ChunkEntry]] = [[]]
     cut_by_ambiguity: list[bool] = [False]
-    chunk_has_step = False
 
     for group in timestamp_groups:
         action_members = [o for o in group if classify_event(o) == EventClassification.ACTION]
@@ -60,18 +59,9 @@ def extract_series(
             cut_by_ambiguity[-1] = True
             chunks.append([])
             cut_by_ambiguity.append(False)
-            chunk_has_step = False
             continue
 
-        action_obs = action_members[0] if action_members else None
-        if action_obs is not None and chunk_has_step and action_obs.trigger in _CHUNK_STARTING_TRIGGERS:
-            chunks.append([])
-            cut_by_ambiguity.append(False)
-            chunk_has_step = False
-
         chunks[-1].extend((o, False) for o in group)
-        if action_obs is not None:
-            chunk_has_step = True
 
     series_list: list[OSeries] = []
     for entries, was_cut in zip(chunks, cut_by_ambiguity, strict=True):

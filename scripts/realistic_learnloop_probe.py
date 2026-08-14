@@ -99,6 +99,37 @@ _PATTERN_B_PUSH_DEEPLINK = [
     _step("continue_lesson", "open", "course_detail", "course_ds301"),
 ]
 
+# Kalıp A + AYNI session'da alakasız İKİNCİ bir hedefli davranış: ders tamamlandıktan hemen
+# sonra, kullanıcı başarı rozetlerine gidip sertifika indiriyor -- course_ds301'den TAMAMEN
+# FARKLI bir hedef (cert_ds301). Bu, segmentasyon düzeltmesinin motive edici senaryosudur (bkz.
+# docs/engine-decisions.md #10): düzeltmeden ÖNCE bu session'ın tek FULL_CHUNK'ı
+# [open_my_courses, open_course, continue_lesson, open_achievements, download_certificate] --
+# continue_lesson'dan sonra tamamen alakasız bir devam var, bu da tek başına ne AMBIGUOUS'a
+# düşme riski taşırdı (continue_lesson etkisi outcome-evidence değilse) ne de VARIABLE_TARGET
+# kirliliğiyle course_ds301 alışkanlığını bozardı. Düzeltmeden SONRA: continue_lesson kendi
+# temiz (course_ds301) önekiyle ANA Pattern A family'sine KATILIR, etkilenmez; yalnızca
+# download_certificate'ı da İÇEREN daha uzun önek VARIABLE_TARGET (iki farklı hedef) olarak
+# ayrıca üretilip Shortcut Intent Builder'da reddedilir -- ne bir şeyi bozar ne yanlışlıkla
+# öneri üretir.
+_PATTERN_A_THEN_CERTIFICATE = [
+    _step("open_my_courses", "route", "dashboard"),
+    _step("open_course", "route", "my_courses", "course_ds301"),
+    _step("continue_lesson", "open", "course_detail", "course_ds301"),
+    _step("open_achievements", "route", "lesson_player"),
+    _step("download_certificate", "download", "achievements", "cert_ds301"),
+]
+
+# Sertifika indirmenin KENDİ, bağımsız giriş yolu (ör. "sertifikan hazır" bildirimi) --
+# continue_lesson'dan hiç geçmez. Yukarıdaki bileşik kalıpta download_certificate hiçbir zaman
+# TEK BAŞINA (course_ds301'den bağımsız) bir aday üretmiyor -- önekler her zaman chunk başından
+# başladığı için daha SONRAKİ bir strong pozisyon her zaman daha ÖNCEKİ pozisyonu da içerir.
+# Bu ayrı, kendi başına tekrarlayan giriş yolu ile download_certificate/cert_ds301 KENDİ
+# bağımsız alışkanlığını hâlâ kazanabiliyor mu diye test edilir.
+_PATTERN_CERTIFICATE_DIRECT = [
+    _step("open_achievements", "route", "dashboard"),
+    _step("download_certificate", "download", "achievements", "cert_ds301"),
+]
+
 # Saf gezinme gürültüsü: alışkanlıkla hiç ilgisi olmayan, tek seferlik keşif session'ları.
 _NOISE_CATALOG_BROWSE = [
     _step("open_catalog", "route", "dashboard"),
@@ -120,23 +151,29 @@ _TIMELINE: list[tuple[int, int, list[Step], str]] = [
     (3, 19 * 60 + 50, _PATTERN_A, "clean A"),
     (4, 22 * 60 + 5, _PATTERN_A_NOTIF_DETOUR, "A + notification detour"),
     (5, 8 * 60 + 30, _PATTERN_B_PUSH_DEEPLINK, "B: push deep-link (weekend morning)"),
+    (6, 21 * 60 + 20, _PATTERN_A_THEN_CERTIFICATE, "A + unrelated certificate download (same session)"),
     (7, 20 * 60 + 15, _PATTERN_A, "clean A"),
     (8, 19 * 60 + 45, _PATTERN_A, "clean A"),
     (9, 21 * 60 + 0, _NOISE_CATALOG_BROWSE, "noise: catalog browsing"),
     (10, 20 * 60 + 20, _PATTERN_A, "clean A"),
     (11, 22 * 60 + 30, _PATTERN_A_RETRY, "A + retry on continue_lesson"),
     (12, 19 * 60 + 55, _PATTERN_WRONG_COURSE, "wrong course (algo210)"),
+    (13, 12 * 60 + 40, _PATTERN_CERTIFICATE_DIRECT, "certificate: direct entry (notification)"),
     (14, 20 * 60 + 5, _PATTERN_A, "clean A"),
     (15, 21 * 60 + 15, _PATTERN_A_NOTIF_DETOUR, "A + notification detour"),
+    (16, 21 * 60 + 25, _PATTERN_A_THEN_CERTIFICATE, "A + unrelated certificate download (same session)"),
     (17, 19 * 60 + 40, _PATTERN_A, "clean A"),
     (18, 9 * 60 + 10, _PATTERN_B_PUSH_DEEPLINK, "B: push deep-link (weekend morning)"),
     (19, 20 * 60 + 50, _PATTERN_INCOMPLETE, "incomplete: distracted after opening course"),
     (20, 21 * 60 + 5, _NOISE_SWIPE_CAROUSEL, "noise: carousel swipe, no course opened"),
     (21, 20 * 60 + 0, _PATTERN_A, "clean A"),
     (22, 22 * 60 + 0, _PATTERN_A_RETRY, "A + retry on continue_lesson"),
+    (23, 12 * 60 + 50, _PATTERN_CERTIFICATE_DIRECT, "certificate: direct entry (notification)"),
     (24, 19 * 60 + 35, _PATTERN_A, "clean A"),
     (25, 20 * 60 + 45, _PATTERN_A_NOTIF_DETOUR, "A + notification detour"),
+    (26, 13 * 60 + 0, _PATTERN_CERTIFICATE_DIRECT, "certificate: direct entry (notification)"),
     (28, 20 * 60 + 25, _PATTERN_A, "clean A"),
+    (29, 21 * 60 + 30, _PATTERN_A_THEN_CERTIFICATE, "A + unrelated certificate download (same session)"),
     (30, 8 * 60 + 50, _PATTERN_B_PUSH_DEEPLINK, "B: push deep-link (weekend morning)"),
 ]
 
@@ -175,6 +212,8 @@ def _build_events() -> list[dict]:
                     "open_catalog": "catalog",
                     "open_course_preview": "course_preview",
                     "view_profile": "profile",
+                    "open_achievements": "achievements",
+                    "download_certificate": "certificate_ready",
                 }.get(action)
                 if view_screen:
                     view_ts = timestamp + timedelta(seconds=30)

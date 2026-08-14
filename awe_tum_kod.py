@@ -69,7 +69,6 @@ def classify_event(observation: Observation) -> EventClassification:
 
     return EventClassification.CONTEXT
 
-
 # FILE: src/awe/adapter/mapping.py
 """Adapter mapping sözleşmesi: müşteriye özel raw event alanlarının canonical alanlara
 deklaratif olarak eşlenmesi (bölüm 6.1, 8).
@@ -162,7 +161,6 @@ class AdapterMapping:
     status: FieldRule = field(default_factory=lambda: FieldRule(default="unknown"))
 
     target: TargetRule = field(default_factory=TargetRule)
-
 
 # FILE: src/awe/adapter/observation_builder.py
 """Raw event dict'ini canonical Observation'a çeviren tek yer (bölüm 6.1).
@@ -328,9 +326,7 @@ def build_observation(raw: dict[str, Any], mapping: AdapterMapping) -> Observati
         quality=quality,
     )
 
-
 # FILE: src/awe/api/__init__.py
-
 
 # FILE: src/awe/api/dependencies.py
 """FastAPI bağımlılık enjeksiyonu: veritabanı session'ı ve proje konfigürasyonu."""
@@ -393,6 +389,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from awe.api.routes_events import router as events_router
 from awe.api.routes_suggestions import router as suggestions_router
@@ -414,6 +411,15 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+app.add_middleware(
+    CORSMiddleware,
+    # Local dev/demo only (client apps are typically served from a different origin/port,
+    # e.g. a Flutter web build on :5000 calling this API on :8000) -- tighten before any
+    # real deployment.
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(events_router)
 app.include_router(suggestions_router)
 
@@ -421,7 +427,6 @@ app.include_router(suggestions_router)
 @app.get("/health", tags=["health"])
 def health() -> dict:
     return {"status": "ok"}
-
 
 # FILE: src/awe/api/routes_events.py
 """Event ingestion ve subject analiz endpoint'leri."""
@@ -505,7 +510,6 @@ def post_analyze_subject(
         ],
     )
 
-
 # FILE: src/awe/api/routes_suggestions.py
 """Suggestion listeleme ve dismiss endpoint'leri."""
 
@@ -517,9 +521,24 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from awe.api.dependencies import get_db_session, get_project_config
-from awe.api.schemas import IntentResponse, SuggestionResponse
+from awe.api.schemas import (
+    IntentResponse,
+    PatternStepResponse,
+    SuggestionExplanationResponse,
+    SuggestionResponse,
+    VariantPatternResponse,
+)
 from awe.config import ProjectConfig
-from awe.services import IntentView, SuggestionView, dismiss_suggestion, list_subject_suggestions
+from awe.services import (
+    IntentView,
+    SuggestionExplanationView,
+    SuggestionView,
+    VariantPatternView,
+    dismiss_suggestion,
+    explain_suggestion,
+    list_subject_suggestions,
+    list_variant_patterns,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/subjects/{subject_id}", tags=["suggestions"])
 
@@ -549,6 +568,49 @@ def _suggestion_response(view: SuggestionView) -> SuggestionResponse:
     )
 
 
+def _explanation_response(view: SuggestionExplanationView) -> SuggestionExplanationResponse:
+    return SuggestionExplanationResponse(
+        suggestion_key=view.suggestion_key,
+        steps=view.steps,
+        repeat_count=view.repeat_count,
+        saved_steps=view.saved_steps,
+        target=view.target,
+        anchor=view.anchor,
+    )
+
+
+def _pattern_response(view: VariantPatternView) -> VariantPatternResponse:
+    return VariantPatternResponse(
+        variant_key=view.variant_key,
+        family_key=view.family_key,
+        pattern=[PatternStepResponse(action=s.action, effect=s.effect, screen=s.screen) for s in view.pattern],
+        decision=view.decision,
+        reason_codes=view.reason_codes,
+        recommended=view.recommended,
+        suggestion_state=view.suggestion_state,
+        repeat_count=view.repeat_count,
+        distinct_days=view.distinct_days,
+        mode=view.mode,
+        destination_screen=view.destination_screen,
+        target=view.target,
+        saved_steps=view.saved_steps,
+    )
+
+
+@router.get("/patterns", response_model=list[VariantPatternResponse])
+def get_variant_patterns(
+    project_id: str,
+    subject_id: str,
+    project_config: ProjectConfig = Depends(get_project_config),
+    session: Session = Depends(get_db_session),
+) -> list[VariantPatternResponse]:
+    """Son `/analyze` çalışmasının bulduğu HER variant için (öneriye dönüşsün ya da dönüşmesin)
+    tespit edilen davranış dizisini ve kararın gerekçesini döndürür -- demo/açıklanabilirlik
+    amaçlı, önerilen ve önerilmeyen örüntüleri aynı sözleşmede karşılaştırmak için."""
+    views = list_variant_patterns(session, project_config, project_id, subject_id)
+    return [_pattern_response(v) for v in views]
+
+
 @router.get("/suggestions", response_model=list[SuggestionResponse])
 def get_suggestions(
     project_id: str,
@@ -575,6 +637,19 @@ def post_dismiss_suggestion(
         raise HTTPException(status_code=404, detail=f"unknown suggestion_key '{suggestion_key}'")
     return _suggestion_response(view)
 
+
+@router.get("/suggestions/{suggestion_key}/explanation", response_model=SuggestionExplanationResponse)
+def get_suggestion_explanation(
+    project_id: str,
+    subject_id: str,
+    suggestion_key: str,
+    project_config: ProjectConfig = Depends(get_project_config),
+    session: Session = Depends(get_db_session),
+) -> SuggestionExplanationResponse:
+    view = explain_suggestion(session, project_id, subject_id, suggestion_key)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"unknown suggestion_key '{suggestion_key}'")
+    return _explanation_response(view)
 
 # FILE: src/awe/api/schemas.py
 """API'nin dışarıya sunduğu Pydantic request/response modelleri.
@@ -639,6 +714,36 @@ class SuggestionResponse(BaseModel):
     dismissed_at: datetime | None
 
 
+class SuggestionExplanationResponse(BaseModel):
+    suggestion_key: str
+    steps: list[str]
+    repeat_count: int
+    saved_steps: int
+    target: str | None
+    anchor: str
+
+
+class PatternStepResponse(BaseModel):
+    action: str
+    effect: str
+    screen: str | None
+
+
+class VariantPatternResponse(BaseModel):
+    variant_key: str
+    family_key: str
+    pattern: list[PatternStepResponse]
+    decision: str
+    reason_codes: list[str]
+    recommended: bool
+    suggestion_state: str | None
+    repeat_count: int | None
+    distinct_days: int | None
+    mode: str | None
+    destination_screen: str | None
+    target: str | None
+    saved_steps: int | None
+
 # FILE: src/awe/benefit/__init__.py
 from awe.benefit.evaluation import evaluate_benefit
 
@@ -670,7 +775,6 @@ def evaluate_benefit(intent: ShortcutIntent, scope_length: int) -> BenefitEviden
     return BenefitEvidence(
         intent_id=intent.intent_id, observed_actions=scope_length, planned_actions=planned_actions
     )
-
 
 # FILE: src/awe/config/__init__.py
 from awe.config.engine_config import (
@@ -726,10 +830,12 @@ class EpisodeConfig:
     min_symbols: int = 2
     """Tek sembollük bir chunk/ortak koşu bir 'davranış akışı' göstermez; aday sayılmaz."""
 
-    max_symbols: int = 8
-    """Belgenin kesinleştirmediği, açıkça implementer kararına bıraktığı azami aday uzunluğu
-    (bölüm 6.4: "Eski MVP'deki max=8 korunacaksa bu ayrıca sabitlenip test edilmelidir").
-    Sınırsız büyüme yerine bilinen bir öncül (8) korunmuştur."""
+    max_symbols: int | None = None
+    """Aday sembol dizisinin azami uzunluğu. `None` = sınırsız (varsayılan, kullanıcı kararıyla
+    -- bkz. docs/engine-decisions.md): LCS araması zaten bu değere bakmaksızın chunk'ın TAM
+    sembol dizisi üzerinde çalışıyordu, önceki sabit 8 yalnızca SONUÇ adayını kırpıp gerçek uzun
+    alışkanlıkları parçalıyordu. Gerekirse proje bazında `engine_overrides.episode.max_symbols`
+    ile tekrar bir sayı olarak ayarlanabilir."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -835,7 +941,6 @@ class EngineConfig:
 def default_engine_config() -> EngineConfig:
     return EngineConfig()
 
-
 # FILE: src/awe/config/logging_config.py
 """Yapılandırılmış (structured) log kurulumu (bölüm 132).
 
@@ -887,7 +992,6 @@ _ENGINE_LOGGER = logging.getLogger("awe.engine")
 
 def log_event(event: str, **fields: object) -> None:
     _ENGINE_LOGGER.info(event, extra={"awe_event": event, **fields})
-
 
 # FILE: src/awe/config/project_config.py
 """Proje bazlı konfigürasyon: hangi Adapter mapping'i, hangi timezone, hangi eşik override'ları.
@@ -1003,7 +1107,6 @@ class ProjectRegistry:
     def known_project_ids(self) -> list[str]:
         return sorted(p.stem for p in self._config_dir.glob("*.yaml"))
 
-
 # FILE: src/awe/config/settings.py
 """Süreç genelindeki ortam ayarları (veritabanı bağlantısı, log seviyesi vb.)."""
 
@@ -1025,7 +1128,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
 
 # FILE: src/awe/domain/__init__.py
 """AWE Core domain modelleri.
@@ -1068,7 +1170,6 @@ class BenefitEvidence:
         if self.saved_actions == 1:
             return BenefitLevel.LIMITED
         return BenefitLevel.CLEAR
-
 
 # FILE: src/awe/domain/enums.py
 """AWE Core'un paylaştığı, uygulamadan bağımsız sabit kelime dağarcığı.
@@ -1131,6 +1232,29 @@ class ObservationEffect(StrEnum):
     VIEW = "view"
     NONE = "none"
     UNKNOWN = "unknown"
+
+
+OUTCOME_EVIDENCE_EFFECTS = frozenset(
+    effect.value
+    for effect in (
+        ObservationEffect.SUBMIT,
+        ObservationEffect.CREATE,
+        ObservationEffect.DELETE,
+        ObservationEffect.CONFIRM,
+        ObservationEffect.UPDATE,
+        ObservationEffect.TOGGLE,
+        ObservationEffect.REQUEST,
+        ObservationEffect.DOWNLOAD,
+        ObservationEffect.SELECT,
+        ObservationEffect.FILTER,
+        ObservationEffect.SORT,
+    )
+)
+"""Anchor Resolver'ın (bölüm 6.9) "outcome-evidence effect" kanıt kaynağı ve Episode Candidate
+Builder'ın "strong position" tanımının bir parçası (bkz. docs/engine-decisions.md #10). Burada,
+`awe.planner.anchors`te değil: aşama 4 (`awe.episodes.candidates`) ve aşama 9
+(`awe.planner.anchors`) ikisi de import edebilsin diye -- aşama 4'ün aşama 9'dan import etmesi
+geriye doğru bir katman ihlali olurdu."""
 
 
 class ObservationStatus(StrEnum):
@@ -1265,10 +1389,21 @@ class EpisodeCandidateKind(StrEnum):
     """Bir Episode Candidate'in nasıl üretildiği — yalnızca açıklanabilirlik amaçlı."""
 
     FULL_CHUNK = "full_chunk"
+    """Bir OSeries chunk'ının TAMAMI, hiç bölünmeden: chunk'ta hiç strong pozisyon yoktu YA DA
+    tek strong pozisyon chunk'ın son adımıydı (bkz. `awe.episodes.candidates._endpoint_
+    hypotheses`, docs/engine-decisions.md #10)."""
+    EPISODE_SPAN = "episode_span"
+    """`_endpoint_hypotheses`'in ürettiği, strong pozisyonlarda biten (ya da son strong
+    pozisyondan sonraki) BİRDEN FAZLA çakışan/ayrık hipotezden biri (bkz.
+    docs/engine-decisions.md #10). Kaynağı ister bir OSeries chunk'ının tamamı ister bir
+    COMMON_SUBSEQUENCE eşleşmesi olsun aynı etikettir — önemli olan üretim yöntemi
+    (hipotez-bölme), kaynak değil."""
     COMMON_SUBSEQUENCE = "common_subsequence"
     """Farklı chunk'lar arasında bulunan, sıra-korumalı (mutlaka ardışık olması gerekmeyen)
-    exact ortak alt dizi (bkz. `awe.episodes.candidates` modül docstring'i — bölüm 6.4'ün
-    "contiguous" tanımından kasıtlı bir sapma, gerekçesi orada belgelenir)."""
+    exact ortak alt dizinin TAMAMI, hiç bölünmeden (bkz. `awe.episodes.candidates` modül
+    docstring'i — bölüm 6.4'ün "contiguous" tanımından kasıtlı bir sapma, gerekçesi orada
+    belgelenir). Eşleşme içinde birden fazla strong pozisyon varsa bunun yerine EPISODE_SPAN
+    üretilir."""
 
 
 class SuggestionState(StrEnum):
@@ -1303,14 +1438,15 @@ class ReasonCode(StrEnum):
     CONFLICTING_EVENT_ID = "conflicting_event_id"
     AMBIGUOUS_TIMESTAMP_ORDER = "ambiguous_timestamp_order"
 
-
 # FILE: src/awe/domain/episode.py
 """Episode Candidate modeli.
 
-Family eşleştirmesine giren aday davranış birimi. İki kaynaktan üretilir: bir OSeries'in
-tamamı (`FULL_CHUNK`) ya da farklı chunk/session'lar arasında bulunan, sıra-korumalı exact
-ortak alt diziler (`COMMON_SUBSEQUENCE` — bkz. `awe.episodes.candidates` modül docstring'i).
-Henüz habit kararı vermez — yalnızca Exact Base Family'nin girişidir.
+Family eşleştirmesine giren aday davranış birimi. Üç kaynaktan üretilir: bir OSeries'in tamamı
+(`FULL_CHUNK`), farklı chunk/session'lar arasında bulunan sıra-korumalı exact ortak alt diziler
+(`COMMON_SUBSEQUENCE`), ya da bunlardan strong pozisyonlarda (target-carrying/outcome-evidence
+adımlar) çakışan "endpoint hypothesis" adayları olarak türetilen `EPISODE_SPAN` (bkz.
+`awe.episodes.candidates` modül docstring'i, docs/engine-decisions.md #10). Henüz habit kararı
+vermez — yalnızca Exact Base Family'nin girişidir.
 """
 
 from __future__ import annotations
@@ -1352,7 +1488,6 @@ class EpisodeCandidate:
     def targets(self) -> tuple[str | None, ...]:
         return tuple(step.target for step in self.steps)
 
-
 # FILE: src/awe/domain/family.py
 """Exact Base Family modeli (bölüm 6.5).
 
@@ -1386,7 +1521,6 @@ class BaseFamily:
     @property
     def support(self) -> int:
         return len(self.occurrence_ids)
-
 
 # FILE: src/awe/domain/habit.py
 """Habit Evaluator'ın kanıt ve karar modelleri (bölüm 6.7).
@@ -1473,7 +1607,6 @@ class HabitAssessment:
     evidence: HabitEvidence | None
     reason_codes: tuple[ReasonCode, ...] = ()
 
-
 # FILE: src/awe/domain/observation.py
 """Canonical Observation modeli (bkz. AWE_MVP_TASARIMI_BAGIMSIZ_INCELEME.md bölüm 4).
 
@@ -1540,7 +1673,6 @@ class Observation:
     mapping_version: str = "unversioned"
 
     quality: ObservationQuality = field(default_factory=lambda: ObservationQuality(has_screen=False))
-
 
 # FILE: src/awe/domain/plan.py
 """Anchor Resolver, Scope Projector, Destination Resolver ve Shortcut Intent Builder
@@ -1612,7 +1744,6 @@ class ShortcutIntent:
     supporting_occurrences: int
     reason_codes: tuple[ReasonCode, ...] = ()
 
-
 # FILE: src/awe/domain/risk.py
 """Risk Evaluator'ın kanıt ve karar modelleri (bölüm 6.13).
 
@@ -1657,7 +1788,6 @@ class RiskAssessment:
     evidence: RiskEvidence
     reason_codes: tuple[ReasonCode, ...] = ()
 
-
 # FILE: src/awe/domain/screen_evidence.py
 """Screen Transition Evidence modeli (bölüm 6.8).
 
@@ -1682,7 +1812,6 @@ class ScreenTransitionEvidence:
     """`STABLE` ise session'lar arası ortak ekran; aksi halde `None`."""
     supporting_sessions: int
     conflicting_screens: tuple[str, ...] = ()
-
 
 # FILE: src/awe/domain/series.py
 """O-Series modeli: bir session içindeki tek structural chunk (bölüm 6.3).
@@ -1740,7 +1869,6 @@ class OSeries:
     def is_empty(self) -> bool:
         return len(self.steps) == 0
 
-
 # FILE: src/awe/domain/suggestion.py
 """Selector çıktısı ve suggestion lifecycle modeli (bölüm 6.15).
 
@@ -1785,7 +1913,6 @@ class Suggestion:
     updated_at: datetime | None = None
     dismissed_at: datetime | None = None
     dismiss_cooldown_until: datetime | None = None
-
 
 # FILE: src/awe/domain/target.py
 """Target Resolver çıktı modeli (bölüm 6.6).
@@ -1833,7 +1960,6 @@ class TargetVariant:
         if len(distinct) == 1:
             return next(iter(distinct))
         return None
-
 
 # FILE: src/awe/domain/tokens.py
 """Karşılaştırma için canonical davranış sembolü ve adım modeli.
@@ -1887,7 +2013,6 @@ class BehaviorStep:
     def symbol(self) -> Symbol:
         return self.token.symbol
 
-
 # FILE: src/awe/episodes/__init__.py
 from awe.episodes.candidates import build_episode_candidates
 
@@ -1897,10 +2022,18 @@ __all__ = ["build_episode_candidates"]
 """Episode Candidate Builder: Exact Base Family eşleştirmesine giren aday davranış
 birimlerini üretir. Henüz habit kararı vermez.
 
-İki aday tipi çıkarılır:
-1. Her `OSeries` (structural chunk) chunk'ın tamamı (`FULL_CHUNK`).
-2. Farklı chunk'lar arasında bulunan, sıra-korumalı exact ortak alt diziler
-   (`COMMON_SUBSEQUENCE`).
+Üç kaynaktan aday çıkar:
+1. Bir `OSeries` (structural chunk) chunk'ın tamamı, hiç bölünmeden (`FULL_CHUNK`).
+2. Aynı chunk'ın (ya da bir COMMON_SUBSEQUENCE eşleşmesinin) strong pozisyonlarda bölünmesiyle
+   üretilen, birbirine ÇAKIŞABİLEN "endpoint hypothesis" adayları (`EPISODE_SPAN` — bkz.
+   `_endpoint_hypotheses`, docs/engine-decisions.md #10). Strong pozisyon = target taşıyan ya da
+   outcome-evidence effect'li adım (Anchor Resolver'ın kendi tanımıyla aynı, bkz.
+   `awe.domain.enums.OUTCOME_EVIDENCE_EFFECTS`). Her strong pozisyon BAĞIMSIZ bir hipotezdir —
+   bir span SINIRI değil: chunk başından o pozisyona kadarki önek kendi adayını oluşturur,
+   sonraki bir strong pozisyon bunu geçersiz kılmaz ya da yutmaz. Son strong pozisyondan sonra
+   kalan (kendi içinde strong pozisyonu olmayan) bir kuyruk varsa, o da ayrı bir aday olur.
+3. Farklı chunk'lar arasında bulunan, sıra-korumalı exact ortak alt diziler
+   (`COMMON_SUBSEQUENCE`) — bunlar da (2)'deki AYNI hipotez-bölme işleminden geçer.
 
 Step eşitliği `Symbol = (action, effect, screen, mapping_version)` tam eşitliğidir; bir
 adımın DEĞERİNDE hiçbir tolerans yoktur (fuzzy/yaklaşık eşleşme yok). Ancak iki chunk
@@ -1921,18 +2054,20 @@ alışkanlık aynı iki session'da da görülüyorsa), tek bir LCS bulunduktan s
 pozisyonlar her iki diziden de çıkarılır ve arama `min_symbols` altına düşene kadar
 tekrarlanır ("iterative peeling").
 
-Maksimum aday uzunluğu belgede kesinleştirilmemiş bir karardır ("Eski MVP'deki max=8
-korunacaksa bu ayrıca sabitlenip test edilmelidir") — burada `EpisodeConfig.max_symbols`
-(varsayılan 8) olarak sabitlenmiş ve konfigüre edilebilir bırakılmıştır.
+Maksimum aday uzunluğu `EpisodeConfig.max_symbols` ile konfigüre edilebilir; varsayılanı
+`None` (sınırsız, kullanıcı kararıyla -- bkz. docs/engine-decisions.md). LCS araması zaten bu
+değere bakmaksızın chunk'ın TAM sembol dizisi üzerinde çalışır (aşağıdaki `_iterative_common_
+subsequences` çağrısına bak) -- `max_symbols` yalnızca SONUÇ adayının uzunluğunu kırpar, arama
+maliyetini değiştirmez.
 """
 
 from __future__ import annotations
 
 from awe.config.engine_config import EpisodeConfig
-from awe.domain.enums import EpisodeCandidateKind, ObservationTrigger
+from awe.domain.enums import OUTCOME_EVIDENCE_EFFECTS, EpisodeCandidateKind, ObservationTrigger
 from awe.domain.episode import EpisodeCandidate
 from awe.domain.series import OSeries
-from awe.domain.tokens import Symbol
+from awe.domain.tokens import BehaviorStep, Symbol
 
 
 def _longest_common_subsequence_indices(
@@ -2005,6 +2140,56 @@ def _iterative_common_subsequences(
     return results
 
 
+def _is_strong_position(step: BehaviorStep) -> bool:
+    """Anchor Resolver'ın "strong position" tanımıyla (target-carrying OR outcome-evidence
+    effect) birebir aynı, ama Family/Target Resolver hiç çalışmadan ham `BehaviorStep`ten
+    hesaplanır. `variant.fingerprint[i] is not None` ile `step.target is not None` tam
+    eşdeğerdir: `TargetVariant.fingerprint`, `EpisodeCandidate.targets` üzerinden doğrudan
+    `step.target`ten türer, hiçbir aggregation/kayıp yoktur (bkz. docs/engine-decisions.md
+    #10)."""
+    return step.target is not None or step.symbol[1] in OUTCOME_EVIDENCE_EFFECTS
+
+
+def _endpoint_hypotheses(indices: list[int], steps: tuple[BehaviorStep, ...]) -> list[list[int]]:
+    """`indices` (artan sıralı; FULL_CHUNK kaynaklıysa ardışık, COMMON_SUBSEQUENCE kaynaklıysa
+    ardışık olmayabilir) içindeki her strong pozisyonu BAĞIMSIZ bir "endpoint hypothesis"
+    sayar — span SINIRI değil. Her strong pozisyon için, `indices`in BAŞINDAN o pozisyona
+    kadarki önek, ayrı ve ÇAKIŞAN bir hipotez olarak üretilir; hiçbiri diğerini yutmaz ya da
+    geçersiz kılmaz (bkz. docs/engine-decisions.md #10 — chunk'ı strong pozisyonlarda AYRIK
+    span'lara bölen ilk tasarım, gerçek referans verisini kırdığı için reddedildi). Son strong
+    pozisyondan SONRA kalan (kendi içinde strong pozisyonu olmayan bir kuyruk) varsa, o da
+    ayrı, WEAK-anchor'a uygun bir hipotez olur. Hiç strong pozisyon yoksa `indices`in TAMAMI
+    tek bir hipotez olarak döner (bugünkü WEAK-anchor yolu değişmeden korunur).
+
+    Kanıt: `len(hypotheses) == 1` ANCAK VE ANCAK sıfır strong pozisyon varsa geçerlidir — bu
+    durumda hipotez `indices`in birebir kendisidir; aksi halde en az bir GERÇEK önek (`indices`
+    'in tamamından kısa) üretilir. Çağıran bunu FULL_CHUNK/EPISODE_SPAN ve
+    COMMON_SUBSEQUENCE/EPISODE_SPAN etiketlemesi için güvenle kullanır."""
+    strong = [i for i in indices if _is_strong_position(steps[i])]
+    if not strong:
+        return [list(indices)]
+
+    hypotheses = [[i for i in indices if i <= boundary] for boundary in strong]
+    remainder = [i for i in indices if i > strong[-1]]
+    if remainder:
+        hypotheses.append(remainder)
+    return hypotheses
+
+
+def _cap_hypothesis(hypothesis: list[int], steps: tuple[BehaviorStep, ...], max_symbols: int | None) -> list[int]:
+    """`max_symbols` aşılırsa kırpar. Hipotez KENDİ son adımında bir strong pozisyonda
+    bitiyorsa (önek hipotezi, ya da tesadüfen sonu strong olan tek-hipotez durumu), kırpma
+    BAŞTAN yapılır — bitiş noktası (asıl kanıt) korunur, yoksa strong pozisyonun kendisi
+    kırpılıp atılabilir. Bitmiyorsa (sıfır strong pozisyonlu bütün blok YA DA son strong
+    pozisyondan sonraki kuyruk), kırpma SONDAN yapılır — bu, `max_symbols` bu katmana
+    eklenmeden ÖNCEKİ (sınırsız varsayılan öncesi) davranışla birebir aynıdır."""
+    if max_symbols is None or len(hypothesis) <= max_symbols:
+        return hypothesis
+    if _is_strong_position(steps[hypothesis[-1]]):
+        return hypothesis[-max_symbols:]
+    return hypothesis[:max_symbols]
+
+
 def _candidate_from_indices(series: OSeries, indices: list[int], kind: EpisodeCandidateKind) -> EpisodeCandidate:
     steps = tuple(series.steps[i] for i in indices)
     first_observation = series.raw_observations[steps[0].observation_index]
@@ -2035,13 +2220,19 @@ def build_episode_candidates(all_series: list[OSeries], config: EpisodeConfig) -
     for series in all_series:
         if len(series.steps) < config.min_symbols:
             continue
-        indices = list(range(min(len(series.steps), config.max_symbols)))
-        candidates.append(_candidate_from_indices(series, indices, EpisodeCandidateKind.FULL_CHUNK))
-        # Bir common-subsequence karşılaştırması aynı pozisyon kümesini tekrar bulursa (iki
-        # chunk baştan sona birebir aynıysa bu kaçınılmazdır), FULL_CHUNK adayıyla çakışan bir
-        # kopya eklenmesin — aksi halde tek gerçek occurrence iki kez sayılır (bkz. Habit'in
-        # organic_occurrences kanıtı).
-        seen_keys.add((series.series_id, tuple(indices)))
+        full_indices = list(range(len(series.steps)))
+        hypotheses = _endpoint_hypotheses(full_indices, series.steps)
+        kind = EpisodeCandidateKind.FULL_CHUNK if len(hypotheses) == 1 else EpisodeCandidateKind.EPISODE_SPAN
+        for hypothesis in hypotheses:
+            indices = _cap_hypothesis(hypothesis, series.steps, config.max_symbols)
+            if len(indices) < config.min_symbols:
+                continue
+            candidates.append(_candidate_from_indices(series, indices, kind))
+            # Bir common-subsequence karşılaştırması aynı pozisyon kümesini tekrar bulursa (iki
+            # chunk baştan sona birebir aynıysa bu kaçınılmazdır), bu hipotezle çakışan bir
+            # kopya eklenmesin — aksi halde tek gerçek occurrence iki kez sayılır (bkz. Habit'in
+            # organic_occurrences kanıtı).
+            seen_keys.add((series.series_id, tuple(indices)))
 
     eligible = [series for series in all_series if len(series.steps) >= config.min_symbols]
 
@@ -2055,19 +2246,24 @@ def build_episode_candidates(all_series: list[OSeries], config: EpisodeConfig) -
             for left_indices, right_indices in _iterative_common_subsequences(
                 symbols_a, symbols_b, config.min_symbols
             ):
-                capped_left = left_indices[: config.max_symbols]
-                capped_right = right_indices[: config.max_symbols]
-                for series, indices in ((series_a, capped_left), (series_b, capped_right)):
-                    key = (series.series_id, tuple(indices))
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    candidates.append(
-                        _candidate_from_indices(series, indices, EpisodeCandidateKind.COMMON_SUBSEQUENCE)
+                for series, raw_indices in ((series_a, left_indices), (series_b, right_indices)):
+                    hypotheses = _endpoint_hypotheses(raw_indices, series.steps)
+                    kind = (
+                        EpisodeCandidateKind.COMMON_SUBSEQUENCE
+                        if len(hypotheses) == 1
+                        else EpisodeCandidateKind.EPISODE_SPAN
                     )
+                    for hypothesis in hypotheses:
+                        indices = _cap_hypothesis(hypothesis, series.steps, config.max_symbols)
+                        if len(indices) < config.min_symbols:
+                            continue
+                        key = (series.series_id, tuple(indices))
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        candidates.append(_candidate_from_indices(series, indices, kind))
 
     return candidates
-
 
 # FILE: src/awe/families/__init__.py
 from awe.families.matching import compute_family_id, group_into_families
@@ -2127,7 +2323,6 @@ def group_into_families(candidates: list[EpisodeCandidate]) -> list[BaseFamily]:
             )
         )
     return families
-
 
 # FILE: src/awe/habit/__init__.py
 from awe.habit.assessment import evaluate_habit
@@ -2278,7 +2473,6 @@ def evaluate_habit(
     )
     return HabitAssessment(variant_id=variant.variant_id, decision=HabitDecision.HABIT_DETECTED, evidence=evidence)
 
-
 # FILE: src/awe/lifecycle/__init__.py
 from awe.lifecycle.transitions import dismiss, next_state_for_reanalysis
 
@@ -2336,7 +2530,6 @@ def next_state_for_reanalysis(
 def dismiss(now: datetime, config: LifecycleConfig) -> tuple[SuggestionState, datetime]:
     return SuggestionState.DISMISSED, now + timedelta(days=config.dismiss_cooldown_days)
 
-
 # FILE: src/awe/ordering/__init__.py
 from awe.ordering.order_session import group_by_session, order_session
 
@@ -2381,7 +2574,6 @@ def order_session(observations: list[Observation]) -> tuple[list[Observation], O
     confidence = OrderingConfidence.LOW if has_ambiguous_tie else OrderingConfidence.HIGH
     return ordered, confidence
 
-
 # FILE: src/awe/persistence/__init__.py
 from awe.persistence.database import create_database_engine, create_session_factory, session_scope
 from awe.persistence.models import Base
@@ -2420,7 +2612,6 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
         raise
     finally:
         session.close()
-
 
 # FILE: src/awe/persistence/models.py
 """SQLAlchemy şema tanımları.
@@ -2592,7 +2783,6 @@ class SuggestionRecord(Base):
     dismiss_cooldown_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     __table_args__ = (SqlIndex("ix_suggestions_subject_scope", "project_id", "subject_id"),)
-
 
 # FILE: src/awe/persistence/repository.py
 """Analiz pipeline'ının ihtiyaç duyduğu okuma/yazma işlemleri.
@@ -2829,6 +3019,17 @@ def fetch_shortcut_intent_by_key(session: Session, intent_key: str) -> ShortcutI
     return session.execute(stmt).scalar_one_or_none()
 
 
+def fetch_habit_evaluation_by_variant(session: Session, variant_key: str) -> HabitEvaluationRecord | None:
+    stmt = select(HabitEvaluationRecord).where(HabitEvaluationRecord.variant_key == variant_key)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def list_habit_evaluations(session: Session, project_id: str, subject_id: str) -> list[HabitEvaluationRecord]:
+    stmt = select(HabitEvaluationRecord).where(
+        HabitEvaluationRecord.project_id == project_id, HabitEvaluationRecord.subject_id == subject_id
+    )
+    return list(session.execute(stmt).scalars().all())
+
 # FILE: src/awe/persistence/serialization.py
 """Domain modelleri ile JSON-uyumlu sözlükler arasında dönüşüm.
 
@@ -3059,7 +3260,6 @@ def risk_decision_to_str(decision: RiskDecision) -> str:
 def str_to_risk_decision(value: str) -> RiskDecision:
     return RiskDecision(value)
 
-
 # FILE: src/awe/persistence/types.py
 """SQLite, `DateTime(timezone=True)` sütunlarında dahi timezone bilgisini kalıcı olarak
 saklamaz; okuma sırasında naive bir datetime döner. Bu, aware/naive datetime karışmasına yol
@@ -3094,7 +3294,6 @@ class UTCDateTime(TypeDecorator):
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-
 # FILE: src/awe/planner/__init__.py
 from awe.planner.anchors import resolve_anchor
 from awe.planner.destination import resolve_destination
@@ -3116,6 +3315,7 @@ from __future__ import annotations
 
 from awe.config.engine_config import ScreenEvidenceConfig
 from awe.domain.enums import (
+    OUTCOME_EVIDENCE_EFFECTS,
     AnchorStatus,
     AnchorStrength,
     ObservationEffect,
@@ -3131,22 +3331,6 @@ from awe.domain.target import TargetVariant
 from awe.domain.tokens import Symbol
 from awe.screen_evidence import build_screen_transition_evidence
 
-_OUTCOME_EVIDENCE_EFFECTS = frozenset(
-    effect.value
-    for effect in (
-        ObservationEffect.SUBMIT,
-        ObservationEffect.CREATE,
-        ObservationEffect.DELETE,
-        ObservationEffect.CONFIRM,
-        ObservationEffect.UPDATE,
-        ObservationEffect.TOGGLE,
-        ObservationEffect.REQUEST,
-        ObservationEffect.DOWNLOAD,
-        ObservationEffect.SELECT,
-        ObservationEffect.FILTER,
-        ObservationEffect.SORT,
-    )
-)
 ROUTE_OPEN_EFFECTS = frozenset(effect.value for effect in (ObservationEffect.ROUTE, ObservationEffect.OPEN))
 
 
@@ -3181,7 +3365,7 @@ def resolve_anchor(
         )
 
     target_positions = {i for i in range(len(family_symbols)) if variant.fingerprint[i] is not None}
-    outcome_positions = {i for i, symbol in enumerate(family_symbols) if symbol[1] in _OUTCOME_EVIDENCE_EFFECTS}
+    outcome_positions = {i for i, symbol in enumerate(family_symbols) if symbol[1] in OUTCOME_EVIDENCE_EFFECTS}
     strong_positions = target_positions | outcome_positions
 
     if strong_positions:
@@ -3239,7 +3423,6 @@ def resolve_anchor(
         status=AnchorStatus.AMBIGUOUS,
         reason_codes=(ReasonCode.AMBIGUOUS_ANCHOR,),
     )
-
 
 # FILE: src/awe/planner/destination.py
 """Destination Resolver (bölüm 6.11): tek görevi açılacak opaque `screen` anahtarını seçmektir.
@@ -3308,7 +3491,6 @@ def resolve_destination(
         return _UNRESOLVED
 
     return _UNRESOLVED
-
 
 # FILE: src/awe/planner/intent.py
 """Shortcut Intent Builder (bölüm 6.12): yalnızca çözülmüş Habit + Anchor + Scope + Destination
@@ -3391,7 +3573,6 @@ def build_shortcut_intent(
         supporting_occurrences=len(variant.occurrence_ids),
     )
 
-
 # FILE: src/awe/planner/scope.py
 """Scope Projector (bölüm 6.10): yeni davranış kararı vermez, Anchor çözülmüşse family
 prefix'ini mekanik olarak keser. Anchor ambiguous/unresolved ise scope boş kalır."""
@@ -3412,7 +3593,6 @@ def project_scope(family_symbols: tuple[Symbol, ...], variant_id: str, anchor: S
     included = family_symbols[: anchor.position + 1]
     excluded_trailing = family_symbols[anchor.position + 1 :]
     return Scope(variant_id=variant_id, included=included, excluded_trailing=excluded_trailing)
-
 
 # FILE: src/awe/risk/__init__.py
 from awe.risk.evaluation import evaluate_risk
@@ -3574,7 +3754,6 @@ def evaluate_risk(
         reason_codes=tuple(dict.fromkeys(reason_codes)),
     )
 
-
 # FILE: src/awe/screen_evidence/__init__.py
 from awe.screen_evidence.evidence import build_screen_transition_evidence
 
@@ -3714,7 +3893,6 @@ def build_screen_transition_evidence(
         supporting_sessions=supporting_sessions,
     )
 
-
 # FILE: src/awe/selection/__init__.py
 from awe.selection.selector import Candidate, select
 
@@ -3849,7 +4027,6 @@ def select(candidates: list[Candidate], project_id: str, subject_id: str) -> lis
 
     return results
 
-
 # FILE: src/awe/series/__init__.py
 from awe.series.extraction import extract_series
 
@@ -3860,12 +4037,16 @@ __all__ = ["extract_series"]
 (bölüm 6.3). Henüz Family/Habit/Risk/Benefit hesaplamaz.
 
 Eski tasarımdan farklı olarak sınır `breaksEpisode` bayrağı ya da "completion effect" tahmini
-değildir (bu alanlar artık yok). Yalnızca iki yapısal kural chunk sınırı çizer:
-1. Aynı timestamp'te 2+ ACTION-classified event varsa sıra üretilmez — bu grup hiçbir chunk'ın
-   step dizisine girmez (yalnızca trailing raw kanıt olarak korunur), mevcut chunk kesilir.
-2. `navigation`/`notification`/`deeplink` tetikleyicili bir ACTION, mevcut chunk zaten en az
-   bir step içeriyorsa (yani "akışın ortasında" geliyorsa) yeni bir chunk başlatır; kendisi
-   yeni chunk'ın giriş adımı olur.
+değildir (bu alanlar artık yok). Tek bir yapısal kural chunk sınırı çizer: aynı timestamp'te
+2+ ACTION-classified event varsa sıra üretilmez — bu grup hiçbir chunk'ın step dizisine girmez
+(yalnızca trailing raw kanıt olarak korunur), mevcut chunk kesilir ("ambiguity barrier").
+
+Bir session'ın geri kalanı, bu belirsizlik barajı dışında HİÇ bölünmez — özellikle
+`navigation`/`notification`/`deeplink` tetikleyicili bir ACTION artık akışın ortasında bile
+gelse chunk'ı bölmez (kullanıcı talebiyle kaldırılan eski bir kural; gerekçe için bkz.
+docs/engine-decisions.md). Episode Candidate Builder'ın sıra-korumalı LCS eşleştirmesi zaten
+araya giren alakasız adımları (bir bildirim kontrolü gibi) tolere ediyor — bu kural onun önüne
+geçip tek bir session'ın akışını erkenden ve kabaca bölüyordu.
 
 Retry/detour sıkıştırması kasıtlı olarak yoktur (bölüm 6.4: "Fuzzy merge yoktur") — tekrarlanan
 adımlar veya geri-navigasyonlar olduğu gibi kalır; bu, exact family fragmentation riskini
@@ -3879,10 +4060,6 @@ from awe.domain.enums import EventClassification, ObservationTrigger, OrderingCo
 from awe.domain.observation import Observation
 from awe.domain.series import OSeries
 from awe.domain.tokens import BehaviorStep, BehaviorToken
-
-_CHUNK_STARTING_TRIGGERS = frozenset(
-    {ObservationTrigger.NAVIGATION, ObservationTrigger.NOTIFICATION, ObservationTrigger.DEEPLINK}
-)
 
 _ChunkEntry = tuple[Observation, bool]
 """(observation, excluded_from_steps). `excluded_from_steps=True`, bu event'in bir ambiguity
@@ -3908,7 +4085,6 @@ def extract_series(
 
     chunks: list[list[_ChunkEntry]] = [[]]
     cut_by_ambiguity: list[bool] = [False]
-    chunk_has_step = False
 
     for group in timestamp_groups:
         action_members = [o for o in group if classify_event(o) == EventClassification.ACTION]
@@ -3918,18 +4094,9 @@ def extract_series(
             cut_by_ambiguity[-1] = True
             chunks.append([])
             cut_by_ambiguity.append(False)
-            chunk_has_step = False
             continue
 
-        action_obs = action_members[0] if action_members else None
-        if action_obs is not None and chunk_has_step and action_obs.trigger in _CHUNK_STARTING_TRIGGERS:
-            chunks.append([])
-            cut_by_ambiguity.append(False)
-            chunk_has_step = False
-
         chunks[-1].extend((o, False) for o in group)
-        if action_obs is not None:
-            chunk_has_step = True
 
     series_list: list[OSeries] = []
     for entries, was_cut in zip(chunks, cut_by_ambiguity, strict=True):
@@ -3989,15 +4156,19 @@ def _build_chunk(
         cut_by_ambiguity=cut_by_ambiguity,
     )
 
-
 # FILE: src/awe/services/__init__.py
 from awe.services.analysis import AnalysisSummary, VariantAnalysisSummary, analyze_subject
 from awe.services.ingestion import IngestOutcome, ingest_batch, ingest_event
 from awe.services.suggestions import (
     IntentView,
+    PatternStep,
+    SuggestionExplanationView,
     SuggestionView,
+    VariantPatternView,
     dismiss_suggestion,
+    explain_suggestion,
     list_subject_suggestions,
+    list_variant_patterns,
 )
 
 __all__ = [
@@ -4009,8 +4180,13 @@ __all__ = [
     "IngestOutcome",
     "list_subject_suggestions",
     "dismiss_suggestion",
+    "explain_suggestion",
+    "list_variant_patterns",
     "SuggestionView",
     "IntentView",
+    "SuggestionExplanationView",
+    "PatternStep",
+    "VariantPatternView",
 ]
 
 # FILE: src/awe/services/analysis.py
@@ -4290,7 +4466,6 @@ def analyze_subject(
         project_id=project_id, subject_id=subject_id, series_count=len(all_series), variants=summaries
     )
 
-
 # FILE: src/awe/services/ingestion.py
 """Raw event ingestion: idempotent kabul ve canonical Observation üretimi (bölüm 6.1, 6.3).
 
@@ -4372,7 +4547,6 @@ def ingest_batch(
 ) -> list[IngestOutcome]:
     return [ingest_event(session, project_config, url_project_id, raw_event, now) for raw_event in raw_events]
 
-
 # FILE: src/awe/services/suggestions.py
 """Subject'e ait suggestion'ların dışa sunulacak görünümü ve dismiss akışı."""
 
@@ -4383,17 +4557,39 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from awe.benefit import evaluate_benefit
+from awe.config import ProjectConfig
 from awe.config.engine_config import LifecycleConfig
 from awe.domain.benefit import BenefitEvidence
+from awe.domain.enums import HabitDecision, IntentState, SelectionOutcome
+from awe.domain.episode import EpisodeCandidate
+from awe.domain.habit import HabitAssessment
+from awe.domain.series import OSeries
+from awe.domain.target import TargetVariant
+from awe.domain.tokens import Symbol
+from awe.episodes import build_episode_candidates
+from awe.families import group_into_families
 from awe.lifecycle import dismiss as dismiss_lifecycle
-from awe.persistence.models import ShortcutIntentRecord, SuggestionRecord
+from awe.ordering import group_by_session, order_session
+from awe.persistence.models import HabitEvaluationRecord, ShortcutIntentRecord, SuggestionRecord
 from awe.persistence.repository import (
+    fetch_all_observations,
+    fetch_habit_evaluation_by_variant,
     fetch_shortcut_intent_by_key,
     fetch_suggestion_by_key,
+    fetch_suggestion_by_variant,
+    list_habit_evaluations,
     list_suggestions,
 )
+from awe.persistence.serialization import dict_to_anchor, dict_to_habit_evidence, dict_to_scope
+from awe.planner import build_shortcut_intent, project_scope, resolve_anchor, resolve_destination
+from awe.risk import evaluate_risk
+from awe.selection import Candidate, select
+from awe.series import extract_series
+from awe.targeting import resolve_targets
 
 _VISIBLE_STATES = {"active", "stale"}
+_RECOMMENDED_STATES = {"active", "stale"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -4462,6 +4658,205 @@ def list_subject_suggestions(session: Session, project_id: str, subject_id: str)
     return [view for view in views if view is not None]
 
 
+@dataclass(frozen=True, slots=True)
+class SuggestionExplanationView:
+    suggestion_key: str
+    steps: list[str]
+    repeat_count: int
+    saved_steps: int
+    target: str | None
+    anchor: str
+
+
+def explain_suggestion(
+    session: Session, project_id: str, subject_id: str, suggestion_key: str
+) -> SuggestionExplanationView | None:
+    record = fetch_suggestion_by_key(session, suggestion_key)
+    if record is None or record.project_id != project_id or record.subject_id != subject_id:
+        return None
+
+    intent_record = fetch_shortcut_intent_by_key(session, record.primary_intent_key)
+    if intent_record is None:
+        return None
+
+    habit_record = fetch_habit_evaluation_by_variant(session, record.variant_key)
+    assert habit_record is not None and habit_record.evidence is not None
+
+    scope = dict_to_scope(intent_record.scope)
+    anchor = dict_to_anchor(intent_record.anchor)
+    habit_evidence = dict_to_habit_evidence(habit_record.evidence)
+    benefit = BenefitEvidence(
+        intent_id=intent_record.intent_key,
+        observed_actions=intent_record.benefit_observed_actions,
+        planned_actions=intent_record.benefit_planned_actions,
+    )
+    return SuggestionExplanationView(
+        suggestion_key=record.suggestion_key,
+        steps=[symbol[0] for symbol in scope.included],
+        repeat_count=habit_evidence.distinct_sessions,
+        saved_steps=benefit.saved_actions,
+        target=intent_record.target,
+        anchor=anchor.symbol[0],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PatternStep:
+    action: str
+    effect: str
+    screen: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class VariantPatternView:
+    """Bir variant için, önerilip önerilmediğinden bağımsız olarak motorun bulduğu davranış
+    dizisi ve kararının açıklaması. `explain_suggestion`'dan farkı: yalnızca ACTIVE/STALE
+    suggestion'lar için değil, `habit_evaluations`'a giren HER variant için üretilir --
+    böylece 'neden önerilmedi' de aynı pattern kanıtıyla gösterilebilir."""
+
+    variant_key: str
+    family_key: str
+    pattern: list[PatternStep]
+    decision: str
+    reason_codes: list[str]
+    recommended: bool
+    suggestion_state: str | None
+    repeat_count: int | None
+    distinct_days: int | None
+    mode: str | None
+    destination_screen: str | None
+    target: str | None
+    saved_steps: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RecomputedContext:
+    """Yalnızca `family.symbols` + `TargetVariant`larını yeniden türetmek için pipeline'ın
+    ucuz/deterministik baş kısmını (Habit Evaluator'a kadar) tekrar çalıştırır -- hiçbir şey
+    kalıcı hale getirmez. `analyze_subject`'in kendi hesapladığı `family_id`/`variant_id`
+    değerleri exact sembol dizisinden türeyen deterministik hash'ler olduğundan (bkz.
+    `awe.families.matching`), burada yeniden hesaplananlar önceki `/analyze` çağrısının
+    kalıcı `habit_evaluations`/`suggestions` kayıtlarındaki key'lerle birebir eşleşir."""
+
+    symbols_by_family: dict[str, tuple[Symbol, ...]]
+    variants_by_key: dict[str, TargetVariant]
+    candidates_by_id: dict[str, EpisodeCandidate]
+    series_by_id: dict[str, OSeries]
+
+
+def _recompute_context(
+    session: Session, project_config: ProjectConfig, project_id: str, subject_id: str
+) -> _RecomputedContext:
+    observations = fetch_all_observations(session, project_id, subject_id)
+    all_series = []
+    for _session_id, session_observations in group_by_session(observations).items():
+        ordered, confidence = order_session(session_observations)
+        all_series.extend(extract_series(ordered, confidence))
+    series_by_id = {series.series_id: series for series in all_series}
+
+    episode_candidates = build_episode_candidates(all_series, project_config.engine.episode)
+    candidates_by_id = {candidate.candidate_id: candidate for candidate in episode_candidates}
+    families = group_into_families(episode_candidates)
+
+    symbols_by_family: dict[str, tuple[Symbol, ...]] = {}
+    variants_by_key: dict[str, TargetVariant] = {}
+    for family in families:
+        symbols_by_family[family.family_id] = family.symbols
+        for variant in resolve_targets(family, candidates_by_id):
+            variants_by_key[variant.variant_id] = variant
+
+    return _RecomputedContext(symbols_by_family, variants_by_key, candidates_by_id, series_by_id)
+
+
+def _reason_codes_for_undetected_intent(
+    context: _RecomputedContext,
+    project_config: ProjectConfig,
+    project_id: str,
+    subject_id: str,
+    record: HabitEvaluationRecord,
+) -> list[str]:
+    """`habit_detected` olduğu halde hiç `SuggestionRecord`'a dönüşmemiş bir variant için
+    (ör. anchor/hedef çözülemedi, Risk BLOCK dedi ya da Benefit yetersizdi), motorun asıl
+    Selector'ını (`awe.selection.select`) TEK adaylık bir listeyle tekrar çalıştırıp gerçek
+    red gerekçesini döndürür -- burada tahmini bir kod uydurmak yerine, motorun kendi
+    `_is_eligible`/`select` mantığını birebir kullanır."""
+
+    variant = context.variants_by_key.get(record.variant_key)
+    family_symbols = context.symbols_by_family.get(record.family_key)
+    if variant is None or family_symbols is None or record.evidence is None:
+        return []
+
+    engine_config = project_config.engine
+    anchor = resolve_anchor(
+        family_symbols, variant, context.candidates_by_id, context.series_by_id, engine_config.screen_evidence
+    )
+    scope = project_scope(family_symbols, variant.variant_id, anchor)
+    destination = resolve_destination(
+        anchor, variant, context.candidates_by_id, context.series_by_id, engine_config.screen_evidence
+    )
+    intent = build_shortcut_intent(variant, anchor, scope, destination)
+
+    if intent.state != IntentState.READY:
+        return [code.value for code in intent.reason_codes]
+
+    risk = evaluate_risk(
+        intent, variant, scope, context.candidates_by_id, context.series_by_id, engine_config.risk
+    )
+    benefit = evaluate_benefit(intent, len(scope.included))
+    habit_assessment = HabitAssessment(
+        variant_id=record.variant_key,
+        decision=HabitDecision.HABIT_DETECTED,
+        evidence=dict_to_habit_evidence(record.evidence),
+    )
+    candidate = Candidate(intent=intent, scope=scope, habit=habit_assessment, risk=risk, benefit=benefit)
+    results = select([candidate], project_id, subject_id)
+    if results and results[0].outcome != SelectionOutcome.SELECTED:
+        return [code.value for code in results[0].reason_codes]
+    return []
+
+
+def list_variant_patterns(
+    session: Session, project_config: ProjectConfig, project_id: str, subject_id: str
+) -> list[VariantPatternView]:
+    context = _recompute_context(session, project_config, project_id, subject_id)
+
+    views: list[VariantPatternView] = []
+    for record in list_habit_evaluations(session, project_id, subject_id):
+        suggestion = fetch_suggestion_by_variant(session, record.variant_key)
+        intent = fetch_shortcut_intent_by_key(session, suggestion.primary_intent_key) if suggestion else None
+
+        reason_codes = list(record.reason_codes)
+        if suggestion is not None:
+            reason_codes = [*reason_codes, *suggestion.reason_codes]
+        elif record.decision == HabitDecision.HABIT_DETECTED.value:
+            reason_codes += _reason_codes_for_undetected_intent(
+                context, project_config, project_id, subject_id, record
+            )
+
+        family_symbols = context.symbols_by_family.get(record.family_key, ())
+        evidence = record.evidence or {}
+        views.append(
+            VariantPatternView(
+                variant_key=record.variant_key,
+                family_key=record.family_key,
+                pattern=[PatternStep(action=s[0], effect=s[1], screen=s[2]) for s in family_symbols],
+                decision=record.decision,
+                reason_codes=reason_codes,
+                recommended=suggestion is not None and suggestion.state in _RECOMMENDED_STATES,
+                suggestion_state=suggestion.state if suggestion else None,
+                repeat_count=evidence.get("distinct_sessions"),
+                distinct_days=evidence.get("distinct_days"),
+                mode=intent.mode if intent else None,
+                destination_screen=intent.destination_screen if intent else None,
+                target=intent.target if intent else None,
+                saved_steps=(
+                    intent.benefit_observed_actions - intent.benefit_planned_actions if intent else None
+                ),
+            )
+        )
+    return views
+
+
 def dismiss_suggestion(
     session: Session, project_id: str, subject_id: str, suggestion_key: str, now: datetime, config: LifecycleConfig
 ) -> SuggestionView | None:
@@ -4476,7 +4871,6 @@ def dismiss_suggestion(
     record.updated_at = now
     session.flush()
     return _to_suggestion_view(session, record)
-
 
 # FILE: src/awe/targeting/__init__.py
 from awe.targeting.resolver import resolve_targets
@@ -4544,7 +4938,6 @@ def resolve_targets(family: BaseFamily, candidates_by_id: dict[str, EpisodeCandi
             )
         )
     return variants
-
 
 # FILE: src/awe/testing/__init__.py
 from awe.testing.generators import (

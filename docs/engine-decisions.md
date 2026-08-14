@@ -233,3 +233,142 @@ Değerlendirilen ve reddedilen alternatifler:
   eşit destekli adaylar arasında ince ayırıcı (tie-break) olarak kalır. Habit Evaluator'ın
   kendi kapısıyla tutarlı, ek mimari değişiklik gerektirmiyor (bkz.
   `awe.selection.selector._ranking_key`).
+
+## 8. Kullanıcı talebiyle kaldırılan O-Series chunk-bölme kuralı + sınırsız `max_symbols`
+
+O-Series Builder (`awe.series.extraction`), ambiguity barrier'a ek olarak ikinci bir yapısal
+kural taşıyordu: `navigation`/`notification`/`deeplink` tetikleyicili bir ACTION, mevcut chunk
+zaten en az bir step içeriyorsa ("akışın ortasında" geliyorsa) yeni bir chunk başlatıyordu.
+Kullanıcı bunun gerçek davranışları gereksiz parçaladığını belirtti ve kaldırılmasını istedi.
+
+Kaldırmadan önce doğrulanan gerekçe: bu kural, bu dosyadaki BAŞKA hiçbir karar gibi
+gerekçelendirilmemişti — kod docstring'i yalnızca mekanik tanım veriyordu, "neden" sorusuna
+cevap yoktu (governing spec dosyası zaten repoda mevcut değil, doğrulanamıyor). Daha önemlisi,
+bu kural Episode Candidate Builder'ın §1'de belgelenen sıra-korumalı LCS eşleştirmesiyle
+çakışıyordu: LCS iki chunk arasındaki araya girmiş alakasız adımları (ör. bir bildirim
+kontrolü) zaten tolere ediyor — bu kural ise LCS hiç devreye girmeden, TEK bir session'ın
+akışını erkenden ve kabaca ikiye bölerek bu toleransın önüne geçiyordu. Sentetik test
+üreticisi (`awe.testing.generators`) bu kuralı hiçbir profilde hiç tetiklemiyordu (trigger hep
+`button`) — kaldırmanın doğrulanmış sentetik davranış beklentilerine sıfır etkisi oldu; yalnızca
+kuralın kendisini doğrudan test eden 2 dar unit test güncellendi.
+
+Dolaylı bir etki: `awe.screen_evidence.evidence._occurrence_post_view_screen`'in "stabil
+post-view ekranı" için ileri tarama penceresi, `BehaviorStep.observation_index`'in yalnızca
+chunk-içi bir pozisyon olması nedeniyle zaten dolaylı olarak chunk sınırıyla sınırlıydı. Bu
+kuralın kaldırılması bu pencereyi doğal olarak daha cömert hale getirir (chunk'lar artık daha
+uzun) — bu, bu oturumda daha önce düzeltilen Screen Transition Evidence penceresi bug'ıyla AYNI
+yönde bir etki, yeni bir risk değil.
+
+Aynı kararla birlikte `EpisodeConfig.max_symbols` de kaldırıldı (varsayılan artık `None` /
+sınırsız, önceden 8). Teknik gerekçe: `episodes/candidates.py` içindeki LCS araması zaten bu
+değere hiç bakmadan chunk'ın TAM sembol dizisi üzerinde çalışıyordu — `max_symbols` yalnızca
+bulunan eşleşmenin SONUÇ adayına ne kadarının yazılacağını kırpıyordu, arama maliyetini hiç
+etkilemiyordu. Yani sınırı kaldırmak algoritmanın karmaşıklık sınıfını değiştirmez, yalnızca
+gerçekten uzun bir alışkanlık bulunduğunda onu eksiksiz kaydetmeyi sağlar. Alan tamamen
+silinmek yerine `int | None` yapıldı (silmek yerine `None`): kullanıcının kendi ifadesiyle
+sınırsızlık "şuanlık" — ileride bir projede gerekirse `engine_overrides.episode.max_symbols`
+ile kod değişikliği olmadan tekrar bir sayı olarak ayarlanabilir. Hiçbir `config_examples/*.yaml`
+dosyası bunu hiç override etmiyordu, değişiklik hepsine otomatik yansıdı.
+
+## 10. §8'in dolaylı sonucu: strong pozisyonlar "endpoint hypothesis" olarak ele alınır
+
+§8'deki değişiklik (chunk-bölme kuralının kaldırılması + sınırsız `max_symbols`) doğruydu ama
+bir yan etkisi vardı: tek bir `OSeries` chunk artık birbiriyle alakasız birden fazla davranışı
+içerebilecek şekilde sınırsız uzunlukta olabiliyor. `episodes/candidates.py`'nin `FULL_CHUNK`
+üretimi hâlâ "chunk'ın tamamı = TEK atomik aday" varsayımını koşulsuz yapıyordu. Kod izlenerek
+doğrulanmış 8 downstream risk bulundu: Anchor Resolver'ın `AMBIGUOUS` tuzağının çok daha sık
+tetiklenmesi (strong pozisyon sonrası saf route/open kuyruk), "en son strong pozisyon kazanır"
+sezgisinin bir session'daki İKİNCİ, alakasız bir strong action'ı sessizce görmezden gelmesi,
+"bir session = bir amaç" varsayımının artık geçersiz olması, değişken trailing içeriğin aynı
+family'yi parçalaması, Target Resolver'ın alakasız iki tekil-hedefli action'ı yanlışlıkla
+`VARIABLE_TARGET` (compound identity) sayması, `EpisodeCandidate.final_status`/
+`has_shortcut_trigger`'ın alakasız trailing içerikle kirlenmesi.
+
+**Denenip REDDEDİLEN ilk tasarım**: chunk'ı strong pozisyonlarda AYRIK span'lara bölmek (her
+strong pozisyon kendinden önceki strong pozisyondan bu yana olan kısmı "sahiplenir"). Bu,
+kullanıcı tarafından reddedildi — haklı bir gerekçeyle, iki gerçek veri kaynağına karşı elle
+doğrulanmış somut kanıtla: gerçekçi LearnLoop `_PATTERN_A`'da (`open_course(target=X)` hemen
+ardından `continue_lesson(AYNI target=X)`, bu projenin 18+ kez tekrarlanan ASIL referans
+alışkanlığı) ve sentetik test üreticisinin `_STANDARD_FLOW`'unda (`select_option(target=X)`
+hemen ardından `confirm_action`, target'sız) ardışık strong pozisyonlar arasında kesim, gerçek
+alışkanlığı temsil eden adımı `min_symbols` altında tek başına bırakıp TAMAMEN kaybediyordu.
+
+**Seçilen tasarım — "endpoint hypothesis"**: strong pozisyonlar span SINIRI değil, bağımsız
+"bitiş noktası varsayımı"dır. Her strong pozisyon için, dizinin (ya da eşleşmenin) BAŞINDAN o
+pozisyona kadarki önek, ayrı ve ÇAKIŞAN bir aday olarak üretilir; hiçbiri diğerini yutmaz ya da
+geçersiz kılmaz. Son strong pozisyondan sonra kalan (kendi içinde strong pozisyonu olmayan bir
+kuyruk) varsa, o da ayrı, WEAK-anchor'a uygun bir aday olur:
+
+```python
+def _endpoint_hypotheses(indices, steps):
+    strong = [i for i in indices if _is_strong_position(steps[i])]
+    if not strong:
+        return [list(indices)]
+    hypotheses = [[i for i in indices if i <= boundary] for boundary in strong]
+    remainder = [i for i in indices if i > strong[-1]]
+    if remainder:
+        hypotheses.append(remainder)
+    return hypotheses
+```
+
+Kanıt (kind etiketleme için): `len(hypotheses) == 1` ANCAK VE ANCAK sıfır strong pozisyon
+varsa geçerlidir (bu durumda hipotez `indices`in birebir kendisidir); aksi halde en az bir
+GERÇEK önek üretilir. Bu yüzden `kind = FULL_CHUNK if len(hypotheses) == 1 else EPISODE_SPAN`
+eksiksizdir (`grep -rn "EpisodeCandidateKind\."` doğrulaması: bu alan hiçbir yerde downstream
+dallanma için kullanılmıyor, etiketleme kararının sıfır davranışsal riski var).
+
+**`COMMON_SUBSEQUENCE` ERTELENMEDİ**: ilk planda ertelenmesi düşünülmüştü ama kullanıcı bunun
+yanlış olduğunu gösterdi — `_iterative_common_subsequences`, `series.symbols`in TAM, ham
+halinde çalışır ve Anchor Resolver yalnızca `family.symbols`e bakar (hangi candidate türünden
+geldiğini hiç bilmez). Yani `FULL_CHUNK` mükemmel düzeltilse bile, aynı "strong + route
+kuyruğu" şekli iki session arasında birebir tekrarlarsa (EN SIK rastlanan tekrar biçimi —
+iki session'da birebir aynı davranış) `COMMON_SUBSEQUENCE` üzerinden AYNI `AMBIGUOUS` tuzağına
+düşmeye devam ederdi. Çözüm: hem `FULL_CHUNK` hem `COMMON_SUBSEQUENCE`, ham indeks listesini
+(sırasıyla "chunk'ın tamamı" ve "LCS eşleşmesi") AYNI `_endpoint_hypotheses`'ten geçirir.
+`tests/unit/test_episode_candidates.py::test_two_identical_sessions_shaped_strong_then_
+route_tail_never_produce_a_combined_candidate` bunun doğrudan kanıtıdır.
+
+**`max_symbols` kırpma yönü**: bir hipotez KENDİ son adımında strong bir pozisyonda bitiyorsa
+(önek hipotezi), kırpma BAŞTAN yapılır — bitiş noktası (asıl kanıt) korunur. Bitmiyorsa (sıfır
+strong pozisyonlu bütün blok YA DA kuyruk), kırpma SONDAN yapılır — `max_symbols` bu katmana
+eklenmeden ÖNCEKİ davranışla birebir aynı.
+
+**Taşınan sabit**: `_OUTCOME_EVIDENCE_EFFECTS`, `awe.planner.anchors`ten (aşama 9)
+`awe.domain.enums.OUTCOME_EVIDENCE_EFFECTS` olarak (artık private değil) taşındı —
+`awe.episodes.candidates` aşama 4, aşama 9'dan import etmek geriye katman ihlali olurdu.
+`ROUTE_OPEN_EFFECTS` bilerek taşınmadı (episodes/candidates.py'ye gerekmiyor).
+
+**Gerçekçi doğrulama** (`scripts/realistic_learnloop_probe.py`, `_PATTERN_A_THEN_CERTIFICATE`
++ `_PATTERN_CERTIFICATE_DIRECT` eklendi): sonuç ÖNCEDEN TAHMİN EDİLMEDEN çalıştırılıp gözlendi.
+Bulgular:
+- Ana referans alışkanlık (`continue_lesson`/`course_ds301`) TAMAMEN ETKİLENMEDİ — aynı aktif
+  öneri (`destination=lesson_player`, `saved=2`), aynı düzeltme öncesi/sonrası. Asıl amaç
+  doğrulandı.
+- `_PATTERN_A_THEN_CERTIFICATE`'in TAM 5 adımlık öneki (`course_ds301` + `cert_ds301` ikisini
+  birden içeren) doğru şekilde `VARIABLE_TARGET` → `UNSUPPORTED_COMPOUND_TARGET` ile reddedildi
+  — ne yanlış bir öneri üretti ne bir şeyi bozdu.
+- `download_certificate`/`cert_ds301`, KENDİ bağımsız giriş yolundan (`_PATTERN_CERTIFICATE_
+  DIRECT`, continue_lesson'dan hiç geçmeden) `HABIT_DETECTED` oldu — iki bağımsız amacın
+  gerçekten ayırt edilebildiğinin kanıtı. Bir öneriye DÖNÜŞMEDİ ama bunun nedeni bu turun
+  kapsamı dışında: 2 adımlık action-surface bir akışın Benefit formülünde (`planned=2`) hiçbir
+  zaman pozitif tasarruf üretememesi (`saved=0`) — segmentasyonla ilgisiz, önceden var olan bir
+  mekanik.
+- **Beklenmeyen ama geçerli bir bulgu**: segmentasyon, ÖNCEDEN VAR OLAN `_PATTERN_A_NOTIF_
+  DETOUR`'u da güçlendirdi — kendi 3 adımlık `open_course` önekini (check_notifications →
+  open_my_courses → open_course, `course_ds301`) artık BAĞIMSIZ bir aday olarak üretip
+  `HABIT_DETECTED` + CLEAR benefit (`saved=2`, bildirim kontrolü fazladan adım sayıyor)
+  yapıyor — bu, ikinci bir aktif öneri (`destination=course_detail`) olarak yüzeye çıkıyor.
+  Bu YANLIŞ değil (farklı `destination`, Selector'da asıl öneriyle dedupe olmuyor, ikisi de
+  gerçek, geçerli hedefler) ama dikkat çekici: çok daha yaygın (18 occurrence), temiz 2 adımlık
+  eşdeğeri (`open_my_courses→open_course`, `fam_ee9fcab62da3`) hâlâ yalnızca LIMITED benefit
+  (`saved=1`) taşıyor, hiç öneriye dönüşmüyor — nadir ama fazladan adımlı bir varyantın CLEAR'a
+  ulaşıp yaygın, temiz varyantın ulaşamaması, §6'da Selector sıralaması için çözülen dinamiğin
+  AYNISI, burada Benefit eşiği seviyesinde. Bu turun kapsamı dışında bırakıldı (Benefit
+  formülü/eşiği, bu turun konusu olan segmentasyon tasarımından ayrı, önceden var olan bir
+  karar) — kullanıcıya ayrıca raporlandı.
+
+**Açıkça kapsam dışı bırakılan**: sıfır-strong-pozisyonlu chunk'larda (tamamı route/open)
+birden fazla ayrı navigasyon-only yolculuğun hâlâ ayırt edilememesi (ör. "ayarlara bak, geri
+dön" + tamamen ayrı "katalog gez, geri dön" tek chunk'ta) — hiç strong sinyal yokken hangi
+pozisyonların "hipotez" sayılacağına dair bir kıstas yok, bu daha zor ve farklı bir problem,
+bilerek gelecek bir tura bırakıldı.

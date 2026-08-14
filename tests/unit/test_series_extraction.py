@@ -1,9 +1,9 @@
 """O-Series Builder'ın structural chunk sınırları (bölüm 6.3).
 
 Eski tasarımdan farklı olarak sınır `breaksEpisode` bayrağı ya da "completion effect" tahmini
-değil, yalnızca (a) aynı timestamp'te 2+ ACTION-classified event ("ambiguity barrier") ve
-(b) `navigation`/`notification`/`deeplink` tetikleyicili bir ACTION'ın akışın ortasında
-gelmesiyle çizilir.
+değil, yalnızca aynı timestamp'te 2+ ACTION-classified event olmasıyla ("ambiguity barrier")
+çizilir. `navigation`/`notification`/`deeplink` tetikleyicili bir ACTION'ın akışın ortasında
+gelmesi artık chunk'ı BÖLMEZ (kullanıcı kararıyla kaldırıldı, bkz. docs/engine-decisions.md).
 """
 
 from __future__ import annotations
@@ -77,7 +77,10 @@ def test_same_timestamp_multiple_actions_cut_the_chunk_and_are_excluded_from_ste
     assert second.cut_by_ambiguity is False
 
 
-def test_mid_flow_notification_trigger_starts_a_new_chunk():
+def test_notification_trigger_no_longer_splits_the_chunk():
+    """Eski 2. kural (navigation/notification/deeplink mid-flow chunk-split) kaldırıldı (bkz.
+    docs/engine-decisions.md) -- artık hiçbir trigger, akışın neresinde olursa olsun, chunk'ı
+    bölmüyor. Kaldırmanın yanlışlıkla geri gelmediğini doğrulayan regresyon testi."""
     observations = [
         _obs("open_cart", 0),
         _obs("open_promo", 5, trigger=ObservationTrigger.NOTIFICATION),
@@ -85,21 +88,8 @@ def test_mid_flow_notification_trigger_starts_a_new_chunk():
     ]
     series = extract_series(observations, OrderingConfidence.HIGH)
 
-    assert len(series) == 2
-    assert [step.token.action for step in series[0].steps] == ["open_cart"]
-    assert [step.token.action for step in series[1].steps] == ["open_promo", "apply_promo"]
-    assert series[1].entry_trigger == ObservationTrigger.NOTIFICATION
-
-
-def test_notification_trigger_as_the_very_first_action_does_not_cut():
-    observations = [
-        _obs("open_promo", 0, trigger=ObservationTrigger.NOTIFICATION),
-        _obs("apply_promo", 5),
-    ]
-    series = extract_series(observations, OrderingConfidence.HIGH)
-
     assert len(series) == 1
-    assert [step.token.action for step in series[0].steps] == ["open_promo", "apply_promo"]
+    assert [step.token.action for step in series[0].steps] == ["open_cart", "open_promo", "apply_promo"]
 
 
 def test_has_shortcut_trigger_reflects_any_shortcut_triggered_observation_in_the_chunk():

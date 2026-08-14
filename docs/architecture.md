@@ -128,7 +128,10 @@ ifadesinden kullanıcı talebiyle yapılan bilinçli bir sapmadır — gerekçes
 ## 6. Bilinen sınırlamalar
 
 1. **Artımlı state yok** (yukarıda bölüm 2) — büyük event geçmişlerinde Episode Candidate
-   Builder'ın O(n²) maliyeti (pairwise LCS dahil) her analiz çağrısında tekrar ödenir.
+   Builder'ın O(n²) maliyeti (pairwise LCS dahil) her analiz çağrısında tekrar ödenir. O-Series
+   Builder artık yalnızca ambiguity barrier'da böldüğü (bkz. `docs/engine-decisions.md` §8) ve
+   `EpisodeConfig.max_symbols` varsayılanı sınırsız olduğu için, tek bir uzun session'ın tüm
+   akışı da sınırsız uzunlukta tek bir chunk/aday olarak bu maliyete tam katkıda bulunur.
 2. **Exact fragmentation kısmen azaltıldı, tamamen kalkmadı** (bölüm 9.3): sıra-korumalı
    ortak alt dizi eşleşmesi araya eklenmiş/çıkarılmış adımları tolere eder, ama hâlâ (a)
    **sıra değişikliğini** (A→B yerine B→A) ve (b) **değer farkını** (aynı adımın farklı

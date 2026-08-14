@@ -60,6 +60,29 @@ class ObservationEffect(StrEnum):
     UNKNOWN = "unknown"
 
 
+OUTCOME_EVIDENCE_EFFECTS = frozenset(
+    effect.value
+    for effect in (
+        ObservationEffect.SUBMIT,
+        ObservationEffect.CREATE,
+        ObservationEffect.DELETE,
+        ObservationEffect.CONFIRM,
+        ObservationEffect.UPDATE,
+        ObservationEffect.TOGGLE,
+        ObservationEffect.REQUEST,
+        ObservationEffect.DOWNLOAD,
+        ObservationEffect.SELECT,
+        ObservationEffect.FILTER,
+        ObservationEffect.SORT,
+    )
+)
+"""Anchor Resolver'ın (bölüm 6.9) "outcome-evidence effect" kanıt kaynağı ve Episode Candidate
+Builder'ın "strong position" tanımının bir parçası (bkz. docs/engine-decisions.md #10). Burada,
+`awe.planner.anchors`te değil: aşama 4 (`awe.episodes.candidates`) ve aşama 9
+(`awe.planner.anchors`) ikisi de import edebilsin diye -- aşama 4'ün aşama 9'dan import etmesi
+geriye doğru bir katman ihlali olurdu."""
+
+
 class ObservationStatus(StrEnum):
     SUCCESS = "success"
     FAIL = "fail"
@@ -192,10 +215,21 @@ class EpisodeCandidateKind(StrEnum):
     """Bir Episode Candidate'in nasıl üretildiği — yalnızca açıklanabilirlik amaçlı."""
 
     FULL_CHUNK = "full_chunk"
+    """Bir OSeries chunk'ının TAMAMI, hiç bölünmeden: chunk'ta hiç strong pozisyon yoktu YA DA
+    tek strong pozisyon chunk'ın son adımıydı (bkz. `awe.episodes.candidates._endpoint_
+    hypotheses`, docs/engine-decisions.md #10)."""
+    EPISODE_SPAN = "episode_span"
+    """`_endpoint_hypotheses`'in ürettiği, strong pozisyonlarda biten (ya da son strong
+    pozisyondan sonraki) BİRDEN FAZLA çakışan/ayrık hipotezden biri (bkz.
+    docs/engine-decisions.md #10). Kaynağı ister bir OSeries chunk'ının tamamı ister bir
+    COMMON_SUBSEQUENCE eşleşmesi olsun aynı etikettir — önemli olan üretim yöntemi
+    (hipotez-bölme), kaynak değil."""
     COMMON_SUBSEQUENCE = "common_subsequence"
     """Farklı chunk'lar arasında bulunan, sıra-korumalı (mutlaka ardışık olması gerekmeyen)
-    exact ortak alt dizi (bkz. `awe.episodes.candidates` modül docstring'i — bölüm 6.4'ün
-    "contiguous" tanımından kasıtlı bir sapma, gerekçesi orada belgelenir)."""
+    exact ortak alt dizinin TAMAMI, hiç bölünmeden (bkz. `awe.episodes.candidates` modül
+    docstring'i — bölüm 6.4'ün "contiguous" tanımından kasıtlı bir sapma, gerekçesi orada
+    belgelenir). Eşleşme içinde birden fazla strong pozisyon varsa bunun yerine EPISODE_SPAN
+    üretilir."""
 
 
 class SuggestionState(StrEnum):

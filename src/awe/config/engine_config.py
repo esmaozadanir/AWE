@@ -20,10 +20,12 @@ class EpisodeConfig:
     min_symbols: int = 2
     """Tek sembollük bir chunk/ortak koşu bir 'davranış akışı' göstermez; aday sayılmaz."""
 
-    max_symbols: int = 8
-    """Belgenin kesinleştirmediği, açıkça implementer kararına bıraktığı azami aday uzunluğu
-    (bölüm 6.4: "Eski MVP'deki max=8 korunacaksa bu ayrıca sabitlenip test edilmelidir").
-    Sınırsız büyüme yerine bilinen bir öncül (8) korunmuştur."""
+    max_symbols: int | None = None
+    """Aday sembol dizisinin azami uzunluğu. `None` = sınırsız (varsayılan, kullanıcı kararıyla
+    -- bkz. docs/engine-decisions.md): LCS araması zaten bu değere bakmaksızın chunk'ın TAM
+    sembol dizisi üzerinde çalışıyordu, önceki sabit 8 yalnızca SONUÇ adayını kırpıp gerçek uzun
+    alışkanlıkları parçalıyordu. Gerekirse proje bazında `engine_overrides.episode.max_symbols`
+    ile tekrar bir sayı olarak ayarlanabilir."""
 
 
 @dataclass(frozen=True, slots=True)
