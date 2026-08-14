@@ -18,7 +18,7 @@ from awe.config.project_config import ProjectConfig
 from awe.domain.enums import SuggestionState
 from awe.persistence import Base, create_database_engine, create_session_factory
 from awe.persistence.repository import fetch_all_observations
-from awe.services import analyze_subject, ingest_event, list_subject_suggestions
+from awe.services import analyze_subject, explain_suggestion, ingest_event, list_subject_suggestions
 
 _MAPPING = AdapterMapping(
     mapping_version="scenario-v1",
@@ -109,6 +109,14 @@ def test_repeated_route_open_flow_produces_a_selected_weak_navigate_suggestion()
     assert intent.risk_decision == "allow"
     assert intent.benefit_saved_actions == 2
     assert intent.benefit_level == "clear"
+
+    explanation = explain_suggestion(session, "proj", "subj", suggestions[0].suggestion_key)
+    assert explanation is not None
+    assert explanation.steps == ["k1_open_menu", "k2_open_reports", "k3_open_daily_report"]
+    assert explanation.anchor == "k3_open_daily_report"
+    assert explanation.repeat_count == 3
+    assert explanation.saved_steps == 2
+    assert explanation.target is None
 
 
 def test_two_unrelated_sessions_never_merge_into_one_flow():

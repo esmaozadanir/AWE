@@ -32,8 +32,10 @@ def client(tmp_path):
         yield test_client
 
 
-def _raw_event(event_id: str, session_id: str, day: int, action: str, effect: str, screen: str) -> dict:
-    base = datetime(2026, 1, 1, 9, tzinfo=UTC) + timedelta(days=day)
+def _raw_event(
+    event_id: str, session_id: str, day: int, action: str, effect: str, screen: str, minute: int = 0
+) -> dict:
+    base = datetime(2026, 1, 1, 9, tzinfo=UTC) + timedelta(days=day, minutes=minute)
     return {
         "eventId": event_id,
         "projectId": "shopwave",
@@ -48,6 +50,24 @@ def _raw_event(event_id: str, session_id: str, day: int, action: str, effect: st
         "target": {"ref": None},
         "status": "success",
     }
+
+
+def _view_event(event_id: str, session_id: str, day: int, minute: int, screen: str) -> dict:
+    event = _raw_event(event_id, session_id, day, f"view_{screen}", "view", screen, minute=minute)
+    event["trigger"] = "automatic"
+    return event
+
+
+def _explanation_flow_events(day: int) -> list[dict]:
+    session_id = f"sess-explain-{day}"
+    return [
+        _raw_event(f"ee{day}-1", session_id, day, "k1_open_menu", "route", "home"),
+        _view_event(f"ee{day}-2", session_id, day, 1, "menu"),
+        _raw_event(f"ee{day}-3", session_id, day, "k2_open_reports", "route", "menu", minute=2),
+        _view_event(f"ee{day}-4", session_id, day, 3, "reports"),
+        _raw_event(f"ee{day}-5", session_id, day, "k3_open_daily_report", "open", "reports", minute=4),
+        _view_event(f"ee{day}-6", session_id, day, 5, "daily_report"),
+    ]
 
 
 def test_health_endpoint():
@@ -94,4 +114,37 @@ def test_batch_ingest_reports_accepted_and_duplicate_counts(client):
 
 def test_dismiss_unknown_suggestion_returns_404(client):
     response = client.post("/projects/shopwave/subjects/sub_1/suggestions/does-not-exist/dismiss")
+    assert response.status_code == 404
+
+
+def test_suggestion_explanation_returns_step_sequence_and_stats(client):
+    for day in range(3):
+        for raw_event in _explanation_flow_events(day):
+            response = client.post("/projects/shopwave/events", json=raw_event)
+            assert response.status_code == 200
+            assert response.json()["accepted"] is True
+
+    analyze_response = client.post("/projects/shopwave/subjects/sub_1/analyze")
+    assert analyze_response.status_code == 200
+
+    suggestions_response = client.get("/projects/shopwave/subjects/sub_1/suggestions")
+    suggestions = suggestions_response.json()
+    assert len(suggestions) == 1
+    suggestion_key = suggestions[0]["suggestion_key"]
+
+    explanation_response = client.get(
+        f"/projects/shopwave/subjects/sub_1/suggestions/{suggestion_key}/explanation"
+    )
+    assert explanation_response.status_code == 200
+    body = explanation_response.json()
+    assert body["suggestion_key"] == suggestion_key
+    assert body["steps"] == ["k1_open_menu", "k2_open_reports", "k3_open_daily_report"]
+    assert body["anchor"] == body["steps"][-1]
+    assert body["repeat_count"] == 3
+    assert body["saved_steps"] >= 1
+    assert body["target"] is None
+
+
+def test_suggestion_explanation_unknown_key_returns_404(client):
+    response = client.get("/projects/shopwave/subjects/sub_1/suggestions/does-not-exist/explanation")
     assert response.status_code == 404

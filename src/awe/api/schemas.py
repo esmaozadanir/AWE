@@ -58,3 +58,34 @@ class SuggestionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     dismissed_at: datetime | None
+
+
+class SuggestionExplanationResponse(BaseModel):
+    suggestion_key: str
+    steps: list[str]
+    repeat_count: int
+    saved_steps: int
+    target: str | None
+    anchor: str
+
+
+class PatternStepResponse(BaseModel):
+    action: str
+    effect: str
+    screen: str | None
+
+
+class VariantPatternResponse(BaseModel):
+    variant_key: str
+    family_key: str
+    pattern: list[PatternStepResponse]
+    decision: str
+    reason_codes: list[str]
+    recommended: bool
+    suggestion_state: str | None
+    repeat_count: int | None
+    distinct_days: int | None
+    mode: str | None
+    destination_screen: str | None
+    target: str | None
+    saved_steps: int | None

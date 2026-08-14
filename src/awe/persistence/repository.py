@@ -230,3 +230,15 @@ def fetch_suggestion_by_key(session: Session, suggestion_key: str) -> Suggestion
 def fetch_shortcut_intent_by_key(session: Session, intent_key: str) -> ShortcutIntentRecord | None:
     stmt = select(ShortcutIntentRecord).where(ShortcutIntentRecord.intent_key == intent_key)
     return session.execute(stmt).scalar_one_or_none()
+
+
+def fetch_habit_evaluation_by_variant(session: Session, variant_key: str) -> HabitEvaluationRecord | None:
+    stmt = select(HabitEvaluationRecord).where(HabitEvaluationRecord.variant_key == variant_key)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def list_habit_evaluations(session: Session, project_id: str, subject_id: str) -> list[HabitEvaluationRecord]:
+    stmt = select(HabitEvaluationRecord).where(
+        HabitEvaluationRecord.project_id == project_id, HabitEvaluationRecord.subject_id == subject_id
+    )
+    return list(session.execute(stmt).scalars().all())
