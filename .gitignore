@@ -18,3 +18,4 @@ build/
 .vscode/
 evaluation_output/
 scratch/
+awe_tum_kod.py
