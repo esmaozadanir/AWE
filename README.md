@@ -79,16 +79,22 @@ uvicorn awe.api.main:app --reload
 API `http://127.0.0.1:8000/docs` altında etkileşimli dokümantasyonla birlikte ayağa kalkar.
 Uç noktalar:
 
+`project_id`/`subject_id`/`suggestion_key` her yerde query parametresidir (path'te değil):
+
 ```
-POST /projects/{project_id}/events                                    tek event
-POST /projects/{project_id}/events/batch                               event batch
-POST /projects/{project_id}/subjects/{subject_id}/analyze              subject analizi çalıştır
-GET  /projects/{project_id}/subjects/{subject_id}/suggestions          aktif önerileri listele
-POST /projects/{project_id}/subjects/{subject_id}/suggestions/{key}/dismiss
+POST /events?project_id=X                                      tek event
+POST /events/batch?project_id=X                                 event batch
+POST /analyze?project_id=X&subject_id=Y                          subject analizi çalıştır
+POST /pull?project_id=X&subject_id=Y                             dış sunucudan çek + besle + analiz et
+GET  /suggestions?project_id=X&subject_id=Y                       aktif önerileri listele
+GET  /patterns?project_id=X&subject_id=Y                          her variant için tespit edilen davranışı listele
+POST /dismiss?project_id=X&subject_id=Y&suggestion_key=Z
+GET  /explanation?project_id=X&subject_id=Y&suggestion_key=Z
+POST /push?project_id=X&subject_id=Y                              bekleyen önerileri dış sunucuya gönder
 GET  /health
 ```
 
-`{project_id}`, `config_examples/` altındaki bir YAML dosyasına karşılık gelmelidir (ör.
+`project_id`, `config_examples/` altındaki bir YAML dosyasına karşılık gelmelidir (ör.
 `shopwave`, `learnloop`, `taskflow`). Yeni bir müşteri entegrasyonu, yeni bir Python modülü değil
 yeni bir YAML dosyasıdır — mevcut dosyalar hem farklı ham telemetry biçimlerine (bkz.
 `shopwave.yaml` vs `learnloop.yaml` vs `taskflow.yaml`) hem farklı iş sözlüklerine örnek

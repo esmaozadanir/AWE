@@ -130,18 +130,6 @@ class HabitDecision(StrEnum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
-class HabitCadence(StrEnum):
-    """Habit Evaluator'ın distinct_days boşluklarından türettiği, salt açıklanabilirlik
-    amaçlı kaba periyodiklik etiketi — ne yeni bir hard gate ne Selector girdisidir (bkz.
-    docs/engine-decisions.md #7)."""
-
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    BIWEEKLY = "biweekly"
-    MONTHLY = "monthly"
-    IRREGULAR = "irregular"
-
-
 class AnchorStrength(StrEnum):
     STRONG = "strong"
     MEDIUM = "medium"

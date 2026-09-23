@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 
+import httpx
 from sqlalchemy.orm import Session
 
 from awe.benefit import evaluate_benefit
-from awe.config import ProjectConfig
+from awe.config import DeliveryConfig, ProjectConfig
 from awe.config.engine_config import LifecycleConfig
 from awe.domain.benefit import BenefitEvidence
 from awe.domain.enums import HabitDecision, IntentState, SelectionOutcome
@@ -30,6 +32,7 @@ from awe.persistence.repository import (
     fetch_suggestion_by_variant,
     list_habit_evaluations,
     list_suggestions,
+    mark_suggestion_delivery,
 )
 from awe.persistence.serialization import dict_to_anchor, dict_to_habit_evidence, dict_to_scope
 from awe.planner import build_shortcut_intent, project_scope, resolve_anchor, resolve_destination
@@ -65,6 +68,8 @@ class SuggestionView:
     created_at: datetime
     updated_at: datetime
     dismissed_at: datetime | None
+    delivered_at: datetime | None
+    delivery_error: str | None
 
 
 def _to_intent_view(record: ShortcutIntentRecord) -> IntentView:
@@ -99,6 +104,8 @@ def _to_suggestion_view(session: Session, record: SuggestionRecord) -> Suggestio
         created_at=record.created_at,
         updated_at=record.updated_at,
         dismissed_at=record.dismissed_at,
+        delivered_at=record.delivered_at,
+        delivery_error=record.delivery_error,
     )
 
 
@@ -106,6 +113,102 @@ def list_subject_suggestions(session: Session, project_id: str, subject_id: str)
     records = list_suggestions(session, project_id, subject_id, states=_VISIBLE_STATES)
     views = [_to_suggestion_view(session, record) for record in records]
     return [view for view in views if view is not None]
+
+
+def list_pending_deliveries(session: Session, project_id: str, subject_id: str) -> list[SuggestionView]:
+    """`delivered_at` hiç ayarlanmamış YA DA son güncellemeden (`updated_at`) sonra
+    ayarlanmamış (öneri değişmiş ama yeni hali gönderilmemiş) suggestion'lar."""
+    views = list_subject_suggestions(session, project_id, subject_id)
+    return [view for view in views if view.delivered_at is None or view.updated_at > view.delivered_at]
+
+
+def record_delivery(
+    session: Session,
+    project_id: str,
+    subject_id: str,
+    suggestion_key: str,
+    now: datetime,
+    error: str | None = None,
+) -> SuggestionView | None:
+    record = fetch_suggestion_by_key(session, suggestion_key)
+    if record is None or record.project_id != project_id or record.subject_id != subject_id:
+        return None
+    mark_suggestion_delivery(session, suggestion_key, now, error)
+    return _to_suggestion_view(session, record)
+
+
+@dataclass(frozen=True, slots=True)
+class PushResult:
+    success: bool
+    error: str | None = None
+    pushed_count: int = 0
+    push_failed_count: int = 0
+
+
+def _delivery_auth_headers(delivery: DeliveryConfig) -> dict[str, str]:
+    if delivery.auth_env_var is None:
+        return {}
+    token = os.environ.get(delivery.auth_env_var)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _suggestion_payload(view: SuggestionView) -> dict:
+    """Bizim v1 varsayılan payload şeklimiz -- hedef servisin gerçek kontratı netleşince
+    ayarlanması gerekebilir."""
+    return {
+        "suggestion_key": view.suggestion_key,
+        "state": view.state,
+        "reason_codes": view.reason_codes,
+        "intent": {
+            "mode": view.intent.mode,
+            "destination_screen": view.intent.destination_screen,
+            "target": view.intent.target,
+            "requires_user_confirmation": view.intent.requires_user_confirmation,
+        },
+    }
+
+
+def push_pending(
+    session: Session,
+    project_config: ProjectConfig,
+    project_id: str,
+    subject_id: str,
+    now: datetime,
+    client: httpx.Client | None = None,
+) -> PushResult:
+    """Bekleyen (henüz gönderilmemiş/güncellenmiş) önerileri `project_config.delivery.push_url`e
+    gönderir -- `awe.services.ingest_sync.pull_and_analyze`den TAMAMEN bağımsızdır, ayrı
+    tetiklenebilir, ayrı config anahtarına (`delivery:`) bağlıdır. `client` yalnızca testlerde
+    `httpx.MockTransport` ile sahte bir sunucuya bağlamak için opsiyoneldir."""
+    if not project_config.delivery.enabled:
+        return PushResult(success=False, error="delivery.enabled=False")
+    if not project_config.delivery.push_url:
+        return PushResult(success=False, error="delivery.push_url ayarlı değil")
+
+    owns_client = client is None
+    http_client = client or httpx.Client()
+    try:
+        pending = list_pending_deliveries(session, project_id, subject_id)
+        headers = _delivery_auth_headers(project_config.delivery)
+        pushed = failed = 0
+        for view in pending:
+            try:
+                response = http_client.post(
+                    project_config.delivery.push_url, json=_suggestion_payload(view), headers=headers, timeout=15.0
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                record_delivery(session, project_id, subject_id, view.suggestion_key, now, error=str(exc))
+                failed += 1
+            else:
+                record_delivery(session, project_id, subject_id, view.suggestion_key, now)
+                pushed += 1
+        session.commit()
+    finally:
+        if owns_client:
+            http_client.close()
+
+    return PushResult(success=True, pushed_count=pushed, push_failed_count=failed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,9 +402,7 @@ def list_variant_patterns(
                 mode=intent.mode if intent else None,
                 destination_screen=intent.destination_screen if intent else None,
                 target=intent.target if intent else None,
-                saved_steps=(
-                    intent.benefit_observed_actions - intent.benefit_planned_actions if intent else None
-                ),
+                saved_steps=(intent.benefit_observed_actions - intent.benefit_planned_actions if intent else None),
             )
         )
     return views

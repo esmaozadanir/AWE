@@ -69,9 +69,7 @@ def main() -> None:
             print(f"  VARIANT {variant.variant_id[-16:]}  kind={variant.kind.value}  support={variant.support}")
             print(f"    fingerprint={variant.fingerprint}")
 
-            assessment = evaluate_habit(
-                variant, candidates_by_id, all_series, engine_config.timezone, engine_config.habit
-            )
+            assessment = evaluate_habit(variant, candidates_by_id, engine_config.timezone, engine_config.habit)
             reasons = [r.value for r in assessment.reason_codes]
             print(f"    habit={assessment.decision.value}  reasons={reasons}")
             if assessment.decision != HabitDecision.HABIT_DETECTED:
@@ -80,11 +78,6 @@ def main() -> None:
             print(
                 f"    evidence: organic={ev.organic_occurrences} sessions={ev.distinct_sessions} "
                 f"days={ev.distinct_days}"
-            )
-            print(
-                f"    regularity: cadence={ev.cadence.value} mean_gap={ev.mean_gap_days:.1f}g "
-                f"gap_regularity={ev.gap_regularity:.2f} support={ev.support_ratio:.2f} "
-                f"({ev.distinct_days}/{ev.active_days_total})"
             )
 
             anchor = resolve_anchor(

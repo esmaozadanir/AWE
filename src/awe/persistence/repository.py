@@ -237,6 +237,24 @@ def fetch_habit_evaluation_by_variant(session: Session, variant_key: str) -> Hab
     return session.execute(stmt).scalar_one_or_none()
 
 
+def mark_suggestion_delivery(
+    session: Session, suggestion_key: str, now: datetime, error: str | None
+) -> SuggestionRecord | None:
+    """`error=None`: başarılı gönderim, `delivered_at=now` yazılır ve önceki hata temizlenir.
+    `error` verilmişse yalnızca `delivery_error` güncellenir, `delivered_at` DOKUNULMAZ --
+    böylece bir sonraki çalıştırmada bu suggestion tekrar "pending" sayılır (retry)."""
+    record = fetch_suggestion_by_key(session, suggestion_key)
+    if record is None:
+        return None
+    if error is None:
+        record.delivered_at = now
+        record.delivery_error = None
+    else:
+        record.delivery_error = error
+    session.flush()
+    return record
+
+
 def list_habit_evaluations(session: Session, project_id: str, subject_id: str) -> list[HabitEvaluationRecord]:
     stmt = select(HabitEvaluationRecord).where(
         HabitEvaluationRecord.project_id == project_id, HabitEvaluationRecord.subject_id == subject_id

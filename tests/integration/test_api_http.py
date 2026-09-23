@@ -77,64 +77,99 @@ def test_health_endpoint():
     assert response.json() == {"status": "ok"}
 
 
+_SHOPWAVE = {"project_id": "shopwave", "subject_id": "sub_1"}
+
+
 def test_unknown_project_returns_404(client):
-    response = client.post("/projects/does-not-exist/events", json={})
+    response = client.post("/events", params={"project_id": "does-not-exist"}, json={})
     assert response.status_code == 404
+
+
+def test_missing_project_id_returns_422_not_a_crash(client):
+    """project_id/subject_id query parametresi -- eksikse FastAPI handler'ı hiç çalıştırmadan
+    alan-bazlı, okunabilir bir 422 döner (bkz. docs/engine-decisions.md ilgili karar notu)."""
+    response = client.post("/analyze")
+    assert response.status_code == 422
+    locations = [tuple(err["loc"]) for err in response.json()["detail"]]
+    assert ("query", "project_id") in locations
+    assert ("query", "subject_id") in locations
 
 
 def test_event_ingest_analyze_and_suggestion_flow(client):
     for day in range(3):
         response = client.post(
-            "/projects/shopwave/events",
+            "/events",
+            params={"project_id": "shopwave"},
             json=_raw_event(f"evt-{day}", f"sess-{day}", day, "open_cart", "route", "cart"),
         )
         assert response.status_code == 200
         assert response.json()["accepted"] is True
 
-    analyze_response = client.post("/projects/shopwave/subjects/sub_1/analyze")
+    analyze_response = client.post("/analyze", params=_SHOPWAVE)
     assert analyze_response.status_code == 200
     body = analyze_response.json()
     assert body["series_count"] == 3
     assert "variants" in body
 
-    suggestions_response = client.get("/projects/shopwave/subjects/sub_1/suggestions")
+    suggestions_response = client.get("/suggestions", params=_SHOPWAVE)
     assert suggestions_response.status_code == 200
     assert isinstance(suggestions_response.json(), list)
 
 
+def test_pull_endpoint_reports_pull_disabled_for_projects_without_it_configured(client):
+    """shopwave (ve şu an tüm örnek projeler) `pull.enabled=False` ile geliyor -- endpoint bu
+    durumda 5xx değil 200 + `success=False` döner (bkz. awe.services.ingest_sync.
+    pull_and_analyze). PULL ve PUSH bağımsız endpoint'ler -- ayrı ayrı test edilir."""
+    response = client.post("/pull", params=_SHOPWAVE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert "pull.enabled" in body["error"]
+
+
+def test_push_endpoint_reports_delivery_disabled_for_projects_without_it_configured(client):
+    """shopwave (ve şu an tüm örnek projeler) `delivery.enabled=False` ile geliyor -- bkz.
+    awe.services.suggestions.push_pending."""
+    response = client.post("/push", params=_SHOPWAVE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert "delivery.enabled" in body["error"]
+
+
 def test_batch_ingest_reports_accepted_and_duplicate_counts(client):
     events = [_raw_event("evt-batch-1", "sess-batch", 0, "open_cart", "route", "cart")]
-    first = client.post("/projects/shopwave/events/batch", json=events)
+    first = client.post("/events/batch", params={"project_id": "shopwave"}, json=events)
     assert first.status_code == 200
     assert first.json()["accepted_count"] == 1
 
-    second = client.post("/projects/shopwave/events/batch", json=events)
+    second = client.post("/events/batch", params={"project_id": "shopwave"}, json=events)
     assert second.json()["duplicate_count"] == 1
 
 
 def test_dismiss_unknown_suggestion_returns_404(client):
-    response = client.post("/projects/shopwave/subjects/sub_1/suggestions/does-not-exist/dismiss")
+    response = client.post("/dismiss", params={**_SHOPWAVE, "suggestion_key": "does-not-exist"})
     assert response.status_code == 404
 
 
 def test_suggestion_explanation_returns_step_sequence_and_stats(client):
     for day in range(3):
         for raw_event in _explanation_flow_events(day):
-            response = client.post("/projects/shopwave/events", json=raw_event)
+            response = client.post("/events", params={"project_id": "shopwave"}, json=raw_event)
             assert response.status_code == 200
             assert response.json()["accepted"] is True
 
-    analyze_response = client.post("/projects/shopwave/subjects/sub_1/analyze")
+    analyze_response = client.post("/analyze", params=_SHOPWAVE)
     assert analyze_response.status_code == 200
 
-    suggestions_response = client.get("/projects/shopwave/subjects/sub_1/suggestions")
+    suggestions_response = client.get("/suggestions", params=_SHOPWAVE)
     suggestions = suggestions_response.json()
     assert len(suggestions) == 1
     suggestion_key = suggestions[0]["suggestion_key"]
 
-    explanation_response = client.get(
-        f"/projects/shopwave/subjects/sub_1/suggestions/{suggestion_key}/explanation"
-    )
+    explanation_response = client.get("/explanation", params={**_SHOPWAVE, "suggestion_key": suggestion_key})
     assert explanation_response.status_code == 200
     body = explanation_response.json()
     assert body["suggestion_key"] == suggestion_key
@@ -146,5 +181,5 @@ def test_suggestion_explanation_returns_step_sequence_and_stats(client):
 
 
 def test_suggestion_explanation_unknown_key_returns_404(client):
-    response = client.get("/projects/shopwave/subjects/sub_1/suggestions/does-not-exist/explanation")
+    response = client.get("/explanation", params={**_SHOPWAVE, "suggestion_key": "does-not-exist"})
     assert response.status_code == 404

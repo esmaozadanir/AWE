@@ -13,7 +13,6 @@ from awe.domain.enums import (
     EffectPolicy,
     ExecutionExposure,
     FinalActionOwner,
-    HabitCadence,
     HabitDecision,
     IntentState,
     PlanMode,
@@ -21,7 +20,7 @@ from awe.domain.enums import (
     RiskDecision,
     SelectionOutcome,
 )
-from awe.domain.habit import HabitAssessment, HabitEvidence, StatusVector
+from awe.domain.habit import HabitAssessment, HabitEvidence
 from awe.domain.plan import Scope, ShortcutAnchor, ShortcutIntent
 from awe.domain.risk import ReliabilityEvidence, RiskAssessment, RiskEvidence
 from awe.selection import Candidate, select
@@ -36,12 +35,6 @@ def _evidence(days=3, sessions=3) -> HabitEvidence:
         distinct_days=days,
         first_seen_at=_NOW,
         last_seen_at=_NOW,
-        status_vector=StatusVector(success=sessions, fail=0, cancel=0, unknown=0),
-        active_days_total=days,
-        support_ratio=1.0,
-        mean_gap_days=1.0,
-        gap_regularity=1.0,
-        cadence=HabitCadence.DAILY,
     )
 
 

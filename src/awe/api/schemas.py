@@ -75,6 +75,21 @@ class PatternStepResponse(BaseModel):
     screen: str | None
 
 
+class PullResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    ingested_count: int = 0
+    rejected_count: int = 0
+    series_count: int = 0
+
+
+class PushResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    pushed_count: int = 0
+    push_failed_count: int = 0
+
+
 class VariantPatternResponse(BaseModel):
     variant_key: str
     family_key: str

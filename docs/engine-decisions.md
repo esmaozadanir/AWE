@@ -372,3 +372,38 @@ birden fazla ayrı navigasyon-only yolculuğun hâlâ ayırt edilememesi (ör. "
 dön" + tamamen ayrı "katalog gez, geri dön" tek chunk'ta) — hiç strong sinyal yokken hangi
 pozisyonların "hipotez" sayılacağına dair bir kıstas yok, bu daha zor ve farklı bir problem,
 bilerek gelecek bir tura bırakıldı.
+
+## 11. Kullanıcı talebiyle kaldırılan regularity/support istatistik katmanı (§7'nin geri alınması)
+
+§7'de eklenen `HabitEvidence.cadence`/`mean_gap_days`/`gap_regularity`/`active_days_total`/
+`support_ratio`/`status_vector` katmanı, kendi tasarım gerekçesinde de açıkça belirtildiği gibi
+("yalnızca kalıcı kanıt vektörüne eklenip görünürlük/gelecekteki kullanım için taşınır") hiçbir
+gate'e, Selector sıralamasına ya da API yanıtına hiç bağlanmadı. Suggestion explainability
+turunda (`GET .../suggestions/{suggestion_key}/explanation`) yeni bir "neden önerildi" yüzeyi
+eklenirken bu fark edildi: kod izlenerek doğrulandı — `selection/selector.py::_ranking_key`
+yalnızca `distinct_days`/`distinct_sessions`'a bakıyor (bunlar §7'nin DEĞİL, orijinal hard
+gate'in alanları); hiçbir karar mantığı bu altı alana dokunmuyor; `api/schemas.py`/route'larda
+hiçbiri geçmiyor; tek tüketicisi kendi round-trip serialization testiydi. Kullanıcı, hiç
+kullanılmayacaksa kaldırılmasını istedi.
+
+Kaldırılanlar: `domain/habit.py`'den `StatusVector` sınıfı ve `HabitEvidence`'ın altı alanı
+(`HabitEvidence` artık yalnızca `organic_occurrences`/`distinct_sessions`/`distinct_days`/
+`first_seen_at`/`last_seen_at` taşıyor — orijinal MVP hard-gate alanları); `domain/enums.py`'den
+`HabitCadence`; `config/engine_config.py`'den beş cadence eşiği alanı; `habit/assessment.py`'den
+`_gap_statistics`/`_cadence_of`/`_active_days_total` yardımcı fonksiyonları (hesaplama artık
+`distinct_sessions`/`distinct_days`/`first_seen_at`/`last_seen_at`'ta duruyor, `status`/gap/
+pencere hesabı tamamen kalktı); `persistence/serialization.py`'nin encode/decode'undan ilgili
+alanlar. Bu zincirleme olarak `evaluate_habit`'in artık kullanılmayan `all_series` parametresini
+de gereksizleştirdi — `services/analysis.py::_evaluate_variant` ve `analyze_subject`'teki çağrı
+siteleri buna göre sadeleştirildi (kendi `all_series` yerel değişkeni `series_by_id`/log/episode
+inşası için hâlâ gerekli, yalnızca artık `evaluate_habit`'e taşınmıyor).
+
+Test tarafında: `HabitCadence`/`StatusVector`/kaldırılan alanlara özgü sekiz test tamamen
+silindi (`test_habit_assessment.py`); iki test kısmen budandı (`support_ratio`/`status_vector`
+assertion'ları çıkarıldı, asıl test ettikleri `HABIT_DETECTED`/`distinct_*` assertion'ları
+korundu); `test_habit_serialization.py`/`test_selector.py`'deki fixture kurulumları yeni,
+sadeleşmiş `HabitEvidence` imzasına göre güncellendi.
+
+§7'nin kendisi silinmedi — o dönemki ekleme gerekçesi (spesifikasyonun kasıtlı olarak boş
+bıraktığı bir alanı, kullanıcı talebiyle, hiçbir gate'i etkilemeden doldurma denemesi) tarihsel
+kayıt olarak duruyor; bu bölüm yalnızca sonucun (hiç bağlanmadı, kaldırıldı) kaydıdır.

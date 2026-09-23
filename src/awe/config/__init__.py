@@ -8,7 +8,13 @@ from awe.config.engine_config import (
     default_engine_config,
 )
 from awe.config.logging_config import configure_logging, log_event
-from awe.config.project_config import ProjectConfig, ProjectNotFoundError, ProjectRegistry
+from awe.config.project_config import (
+    DeliveryConfig,
+    ProjectConfig,
+    ProjectNotFoundError,
+    ProjectRegistry,
+    PullConfig,
+)
 from awe.config.settings import Settings, get_settings
 
 __all__ = [
@@ -24,6 +30,8 @@ __all__ = [
     "ProjectConfig",
     "ProjectRegistry",
     "ProjectNotFoundError",
+    "DeliveryConfig",
+    "PullConfig",
     "Settings",
     "get_settings",
 ]

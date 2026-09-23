@@ -166,4 +166,11 @@ class SuggestionRecord(Base):
     dismissed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     dismiss_cooldown_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    """Bu suggestion'ın en son başarıyla dış sunucuya gönderildiği an (bkz. `services.
+    suggestions.record_delivery`). `updated_at`'ten eskiyse (ya da hiç yoksa), öneri değişmiş/
+    yeni demektir ve tekrar gönderilmesi gerekir."""
+    delivery_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    """Son gönderim denemesi başarısızsa hata mesajı; başarılı gönderimde temizlenir."""
+
     __table_args__ = (SqlIndex("ix_suggestions_subject_scope", "project_id", "subject_id"),)

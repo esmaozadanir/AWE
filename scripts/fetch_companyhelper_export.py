@@ -30,22 +30,14 @@ from typing import Any
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import load_env_file  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ENV_PATH = _REPO_ROOT / ".env"
 _OUT_PATH = _REPO_ROOT / "scratch" / "companyhelper_export.json"
 
 _TOKEN_KEYS = ("token", "accessToken", "access_token", "jwt")
-
-
-def _load_env_file(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
 
 
 def _extract_token(data: Any) -> str | None:
@@ -78,14 +70,14 @@ def _describe_shape(value: Any, indent: int = 0) -> None:
 
 
 def main() -> None:
-    _load_env_file(_ENV_PATH)
+    load_env_file(_ENV_PATH)
 
-    base_url = os.environ.get("COMPANYHELPER_BASE_URL", "http://your-companyhelper-host:3000")
+    base_url = os.environ.get("COMPANYHELPER_BASE_URL")
     email = os.environ.get("COMPANYHELPER_EMAIL")
     password = os.environ.get("COMPANYHELPER_PASSWORD")
-    if not email or not password:
+    if not base_url or not email or not password:
         sys.exit(
-            "COMPANYHELPER_EMAIL / COMPANYHELPER_PASSWORD .env dosyasında yok.\n"
+            "COMPANYHELPER_BASE_URL / COMPANYHELPER_EMAIL / COMPANYHELPER_PASSWORD .env dosyasında yok.\n"
             f".env.example'a bakıp {_ENV_PATH} dosyasını doldur (git'e girmez)."
         )
 

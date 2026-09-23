@@ -11,6 +11,7 @@ from awe.api.dependencies import get_db_session, get_project_config
 from awe.api.schemas import (
     IntentResponse,
     PatternStepResponse,
+    PushResponse,
     SuggestionExplanationResponse,
     SuggestionResponse,
     VariantPatternResponse,
@@ -25,9 +26,10 @@ from awe.services import (
     explain_suggestion,
     list_subject_suggestions,
     list_variant_patterns,
+    push_pending,
 )
 
-router = APIRouter(prefix="/projects/{project_id}/subjects/{subject_id}", tags=["suggestions"])
+router = APIRouter(tags=["suggestions"])
 
 
 def _intent_response(intent: IntentView) -> IntentResponse:
@@ -109,7 +111,7 @@ def get_suggestions(
     return [_suggestion_response(v) for v in views]
 
 
-@router.post("/suggestions/{suggestion_key}/dismiss", response_model=SuggestionResponse)
+@router.post("/dismiss", response_model=SuggestionResponse)
 def post_dismiss_suggestion(
     project_id: str,
     subject_id: str,
@@ -125,7 +127,7 @@ def post_dismiss_suggestion(
     return _suggestion_response(view)
 
 
-@router.get("/suggestions/{suggestion_key}/explanation", response_model=SuggestionExplanationResponse)
+@router.get("/explanation", response_model=SuggestionExplanationResponse)
 def get_suggestion_explanation(
     project_id: str,
     subject_id: str,
@@ -137,3 +139,24 @@ def get_suggestion_explanation(
     if view is None:
         raise HTTPException(status_code=404, detail=f"unknown suggestion_key '{suggestion_key}'")
     return _explanation_response(view)
+
+
+@router.post("/push", response_model=PushResponse)
+def post_push_pending_suggestions(
+    project_id: str,
+    subject_id: str,
+    project_config: ProjectConfig = Depends(get_project_config),
+    session: Session = Depends(get_db_session),
+) -> PushResponse:
+    """Bekleyen (henüz gönderilmemiş/güncellenmiş) önerileri `project_config.delivery.push_url`e
+    gönderir -- bkz. `awe.services.suggestions.push_pending`. Veri çekme (PULL) BAĞIMSIZ bir
+    yetenektir, ayrı endpoint'te (`POST .../pull`) -- bkz. `awe.api.routes_events`.
+    `project_config.delivery.enabled=False` ise `success=False` + açıklayıcı `error` ile döner
+    (5xx değil 200 -- HTTP hatası değil, projenin henüz tamamlanmamış konfigürasyonu)."""
+    result = push_pending(session, project_config, project_id, subject_id, datetime.now(UTC))
+    return PushResponse(
+        success=result.success,
+        error=result.error,
+        pushed_count=result.pushed_count,
+        push_failed_count=result.push_failed_count,
+    )

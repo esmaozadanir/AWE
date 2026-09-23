@@ -12,7 +12,6 @@ from awe.domain.enums import (
     AnchorStrength,
     EffectPolicy,
     ExecutionExposure,
-    HabitCadence,
     HabitDecision,
     ObservationEffect,
     ObservationSource,
@@ -22,7 +21,7 @@ from awe.domain.enums import (
     ReasonCode,
     RiskDecision,
 )
-from awe.domain.habit import HabitEvidence, StatusVector
+from awe.domain.habit import HabitEvidence
 from awe.domain.observation import Observation, ObservationQuality
 from awe.domain.plan import Scope, ShortcutAnchor
 from awe.domain.risk import ReliabilityEvidence, RiskEvidence
@@ -105,39 +104,16 @@ def habit_evidence_to_dict(evidence: HabitEvidence) -> dict:
         "distinct_days": evidence.distinct_days,
         "first_seen_at": _iso(evidence.first_seen_at),
         "last_seen_at": _iso(evidence.last_seen_at),
-        "status_vector": {
-            "success": evidence.status_vector.success,
-            "fail": evidence.status_vector.fail,
-            "cancel": evidence.status_vector.cancel,
-            "unknown": evidence.status_vector.unknown,
-        },
-        "active_days_total": evidence.active_days_total,
-        "support_ratio": evidence.support_ratio,
-        "mean_gap_days": evidence.mean_gap_days,
-        "gap_regularity": evidence.gap_regularity,
-        "cadence": evidence.cadence.value,
     }
 
 
 def dict_to_habit_evidence(data: dict) -> HabitEvidence:
-    status_vector = data["status_vector"]
     return HabitEvidence(
         organic_occurrences=data["organic_occurrences"],
         distinct_sessions=data["distinct_sessions"],
         distinct_days=data["distinct_days"],
         first_seen_at=datetime.fromisoformat(data["first_seen_at"]),
         last_seen_at=datetime.fromisoformat(data["last_seen_at"]),
-        status_vector=StatusVector(
-            success=status_vector["success"],
-            fail=status_vector["fail"],
-            cancel=status_vector["cancel"],
-            unknown=status_vector["unknown"],
-        ),
-        active_days_total=data["active_days_total"],
-        support_ratio=data["support_ratio"],
-        mean_gap_days=data["mean_gap_days"],
-        gap_regularity=data["gap_regularity"],
-        cadence=HabitCadence(data["cadence"]),
     )
 
 

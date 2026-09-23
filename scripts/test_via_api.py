@@ -50,8 +50,8 @@ def main() -> None:
         app.state.settings = Settings(database_url=database_url, project_config_dir=str(_CONFIG_DIR))
         app.state.project_registry = ProjectRegistry(_CONFIG_DIR)
 
-        print("=== POST /projects/learnloop/events/batch ===")
-        batch_response = client.post(f"/projects/{_PROJECT}/events/batch", json=events)
+        print(f"=== POST /events/batch?project_id={_PROJECT} ===")
+        batch_response = client.post("/events/batch", params={"project_id": _PROJECT}, json=events)
         batch_response.raise_for_status()
         batch = batch_response.json()
         print(
@@ -62,16 +62,16 @@ def main() -> None:
             if not result["accepted"] and not result["duplicate"]:
                 print(f"  REJECTED {result['event_id']}: {result['error']}")
 
-        print(f"\n=== POST /projects/{_PROJECT}/subjects/{_SUBJECT}/analyze ===")
-        analyze_response = client.post(f"/projects/{_PROJECT}/subjects/{_SUBJECT}/analyze")
+        print(f"\n=== POST /analyze?project_id={_PROJECT}&subject_id={_SUBJECT} ===")
+        analyze_response = client.post("/analyze", params={"project_id": _PROJECT, "subject_id": _SUBJECT})
         analyze_response.raise_for_status()
         analysis = analyze_response.json()
         detected = [v for v in analysis["variants"] if v["habit_decision"] == "habit_detected"]
         print(f"series_count={analysis['series_count']}  variant_count={len(analysis['variants'])}")
         print(f"HABIT_DETECTED: {len(detected)}")
 
-        print(f"\n=== GET /projects/{_PROJECT}/subjects/{_SUBJECT}/suggestions ===")
-        suggestions_response = client.get(f"/projects/{_PROJECT}/subjects/{_SUBJECT}/suggestions")
+        print(f"\n=== GET /suggestions?project_id={_PROJECT}&subject_id={_SUBJECT} ===")
+        suggestions_response = client.get("/suggestions", params={"project_id": _PROJECT, "subject_id": _SUBJECT})
         suggestions_response.raise_for_status()
         suggestions = suggestions_response.json()
         print(f"{len(suggestions)} oneri\n")

@@ -24,11 +24,46 @@ class ProjectNotFoundError(KeyError):
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class DeliveryConfig:
+    """Önerilerin dış sunucuya geri gönderilmesi (giden yön) için opsiyonel hedef -- `mapping`in
+    (gelen yön) simetriği. Varsayılan `enabled=False`: `delivery:` bölümü olmayan projeler
+    hiçbir davranış değişikliği görmez."""
+
+    enabled: bool = False
+    push_url: str | None = None
+    auth_env_var: str | None = None
+    """Ayarlıysa, gönderim isteğine `Authorization: Bearer <.env'deki bu değişkenin değeri>`
+    eklenir. Hedef servisin gerçek auth şeması netleşene kadarki bilinen bir v1 varsayımı."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PullConfig:
+    """Dış sunucudan ham veri çekmek için opsiyonel kaynak -- `delivery`nin (giden) simetriği.
+    Yalnızca KİMLİK DOĞRULAMA + HAM VERİYİ GETİRME jeneriktir; çekilen ham veriyi AWE'nin
+    canonical event şekline çevirme (TRANSFORM) her zaman servise özeldir ve burada YOKTUR --
+    bkz. `scripts/external_sync_template.py`."""
+
+    enabled: bool = False
+    pull_url: str | None = None
+    auth_type: str = "none"
+    """"none" | "bearer_env" | "login_then_bearer" """
+    auth_env_var: str | None = None
+    """`auth_type="bearer_env"` için: token'ın okunacağı .env değişkeninin adı."""
+    login_url: str | None = None
+    login_email_env_var: str | None = None
+    login_password_env_var: str | None = None
+    """`auth_type="login_then_bearer"` için: giriş isteğinin adresi ve kimlik bilgilerinin
+    .env değişken adları (CompanyHelper'daki email+şifre->JWT akışıyla aynı desen)."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class ProjectConfig:
     project_id: str
     display_name: str
     mapping: AdapterMapping
     engine: EngineConfig
+    delivery: DeliveryConfig = dataclasses.field(default_factory=DeliveryConfig)
+    pull: PullConfig = dataclasses.field(default_factory=PullConfig)
 
 
 def _build_field_rule(data: dict[str, Any] | None) -> FieldRule:
@@ -61,6 +96,28 @@ def _build_mapping(data: dict[str, Any]) -> AdapterMapping:
     )
 
 
+def _build_delivery(data: dict[str, Any] | None) -> DeliveryConfig:
+    data = data or {}
+    return DeliveryConfig(
+        enabled=data.get("enabled", False),
+        push_url=data.get("push_url"),
+        auth_env_var=data.get("auth_env_var"),
+    )
+
+
+def _build_pull(data: dict[str, Any] | None) -> PullConfig:
+    data = data or {}
+    return PullConfig(
+        enabled=data.get("enabled", False),
+        pull_url=data.get("pull_url"),
+        auth_type=data.get("auth_type", "none"),
+        auth_env_var=data.get("auth_env_var"),
+        login_url=data.get("login_url"),
+        login_email_env_var=data.get("login_email_env_var"),
+        login_password_env_var=data.get("login_password_env_var"),
+    )
+
+
 def _build_engine_overrides(data: dict[str, Any] | None, timezone: str) -> EngineConfig:
     base = default_engine_config()
     if not data:
@@ -84,6 +141,8 @@ def load_project_config(path: Path) -> ProjectConfig:
         display_name=data.get("display_name", data["project_id"]),
         mapping=_build_mapping(data["mapping"]),
         engine=_build_engine_overrides(data.get("engine_overrides"), timezone),
+        delivery=_build_delivery(data.get("delivery")),
+        pull=_build_pull(data.get("pull")),
     )
 
 

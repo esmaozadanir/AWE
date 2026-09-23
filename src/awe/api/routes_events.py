@@ -12,12 +12,13 @@ from awe.api.schemas import (
     AnalysisResponse,
     BatchIngestResponse,
     EventIngestResponse,
+    PullResponse,
     VariantAnalysisResponse,
 )
 from awe.config import ProjectConfig
-from awe.services import IngestOutcome, analyze_subject, ingest_batch, ingest_event
+from awe.services import IngestOutcome, analyze_subject, ingest_batch, ingest_event, pull_and_analyze
 
-router = APIRouter(prefix="/projects/{project_id}", tags=["events"])
+router = APIRouter(tags=["events"])
 
 
 def _ingest_response(outcome: IngestOutcome) -> EventIngestResponse:
@@ -57,7 +58,7 @@ def post_event_batch(
     )
 
 
-@router.post("/subjects/{subject_id}/analyze", response_model=AnalysisResponse)
+@router.post("/analyze", response_model=AnalysisResponse)
 def post_analyze_subject(
     project_id: str,
     subject_id: str,
@@ -77,4 +78,27 @@ def post_analyze_subject(
             )
             for v in summary.variants
         ],
+    )
+
+
+@router.post("/pull", response_model=PullResponse)
+def post_pull_subject(
+    project_id: str,
+    subject_id: str,
+    project_config: ProjectConfig = Depends(get_project_config),
+    session: Session = Depends(get_db_session),
+) -> PullResponse:
+    """Dış sunucudan veri çekip (PULL), AWE'ye besleyip (INGEST) analiz eder (ANALYZE) -- bkz.
+    `awe.services.ingest_sync.pull_and_analyze`. Önerileri geri gönderme (PUSH) BAĞIMSIZ bir
+    yetenektir, ayrı endpoint'te (`POST .../push`) -- bkz. `awe.api.routes_suggestions`.
+    `project_config.pull.enabled=False` ise ya da bu proje için `awe.transforms.{project_id}`
+    henüz yazılmadıysa `success=False` + açıklayıcı `error` ile döner (5xx değil 200 -- bunlar
+    HTTP hatası değil, projenin henüz tamamlanmamış konfigürasyonunun beklenen bir sonucu)."""
+    result = pull_and_analyze(session, project_config, project_id, subject_id, datetime.now(UTC))
+    return PullResponse(
+        success=result.success,
+        error=result.error,
+        ingested_count=result.ingested_count,
+        rejected_count=result.rejected_count,
+        series_count=result.series_count,
     )
